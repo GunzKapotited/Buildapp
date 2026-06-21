@@ -1,0 +1,99 @@
+name: Flutter APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_url:
+        description: 'Release URL untuk download ZIP'
+        required: true
+        type: string
+      tag:
+        description: 'Tag untuk release'
+        required: true
+        type: string
+      build_type:
+        description: 'Tipe Build (debug/release)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - debug
+          - release
+
+jobs:
+  build:
+    name: Build Flutter APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl wget
+
+      - name: Download project ZIP
+        run: |
+          echo "Downloading project from: ${{ inputs.release_url }}"
+          curl -L -o project.zip "${{ inputs.release_url }}"
+          unzip project.zip -d project
+
+      - name: Setup project
+        run: |
+          cd project
+          # Cari folder yang mengandung pubspec.yaml
+          PROJECT_DIR=$(find . -maxdepth 2 -name "pubspec.yaml" -exec dirname {} \; | head -1)
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "❌ pubspec.yaml tidak ditemukan!"
+            exit 1
+          fi
+          echo "📁 Project directory: $PROJECT_DIR"
+          mv $PROJECT_DIR/* .
+          rm -rf $(find . -maxdepth 1 -type d -not -name "." -not -name ".*")
+
+      - name: Get dependencies
+        run: |
+          cd project
+          flutter pub get
+
+      - name: Build APK
+        run: |
+          cd project
+          if [ "${{ inputs.build_type }}" == "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
+
+      - name: Find APK
+        id: find_apk
+        run: |
+          cd project
+          if [ "${{ inputs.build_type }}" == "debug" ]; then
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "app-debug.apk" | head -1)
+          else
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
+          fi
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK_PATH"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk
+          path: project/${{ steps.find_apk.outputs.APK_PATH }}
+          if-no-files-found: error
+
+      - name: Success message
+        run: |
+          echo "✅ Build sukses!"
+          echo "📦 APK size: $(du -h project/${{ steps.find_apk.outputs.APK_PATH }} | cut -f1)"
