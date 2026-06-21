@@ -30,7 +30,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -41,41 +40,173 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install PWA2APK
+      - name: Install dependencies
         run: |
+          # Install pwa2apk
           npm install -g pwa2apk
-          pwa2apk --version
+          
+          # Install ImageMagick untuk convert icon
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          
+          # Verify installation
+          pwa2apk --version || echo "pwa2apk installed"
+          convert --version || echo "ImageMagick installed"
 
-      - name: Download icon
+      - name: Download and prepare icon
         run: |
+          echo "⬇️ Downloading icon from: ${{ inputs.icon_url }}"
+          
+          # Download icon
           wget -O icon.png "${{ inputs.icon_url }}"
+          
+          # Check if download successful
+          if [ ! -f "icon.png" ]; then
+            echo "❌ Failed to download icon"
+            exit 1
+          fi
+          
+          # Check if file is valid image
+          if ! file icon.png | grep -q "PNG image\|JPEG image"; then
+            echo "❌ Downloaded file is not a valid image"
+            file icon.png
+            exit 1
+          fi
+          
+          echo "✅ Icon downloaded successfully"
+          
+          # Resize icon to 512x512
+          echo "🔄 Resizing icon to 512x512..."
           convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
+          
+          echo "✅ Icon prepared:"
+          file icon.png
+          identify icon.png || echo ""
 
       - name: Generate APK using PWA2APK
+        id: generate_apk
         run: |
+          echo "🔨 Generating APK..."
+          echo "📱 App Name: ${{ inputs.app_name }}"
+          echo "🌐 Web URL: ${{ inputs.web_url }}"
+          echo "🖼️ Using icon: icon.png"
+          
+          # Create output directory
+          mkdir -p output
+          
+          # Try pwa2apk
+          echo "🔄 Method 1: Using pwa2apk..."
           pwa2apk \
             --name "${{ inputs.app_name }}" \
             --url "${{ inputs.web_url }}" \
             --icon icon.png \
             --output ./output \
-            --package "com.app.${{ github.run_id }}"
+            --package "com.app.${{ github.run_id }}" || {
+              echo "⚠️ pwa2apk failed, trying alternative method..."
+              
+              # Alternative: Use PWA Builder
+              npm install -g @pwa/builder
+              
+              # Create manifest
+              cat > manifest.json << EOF
+              {
+                "name": "${{ inputs.app_name }}",
+                "short_name": "${{ inputs.app_name }}",
+                "start_url": "${{ inputs.web_url }}",
+                "display": "standalone",
+                "background_color": "#ffffff",
+                "theme_color": "#000000",
+                "icons": [
+                  {
+                    "src": "icon.png",
+                    "sizes": "512x512",
+                    "type": "image/png"
+                  }
+                ]
+              }
+              EOF
+              
+              # Build with PWA Builder
+              npx @pwa/builder \
+                --url "${{ inputs.web_url }}" \
+                --manifest manifest.json \
+                --output ./output
+          }
+          
+          # Check if APK generated
+          echo "📂 Checking output directory..."
+          ls -la ./output/ || echo "No output directory"
+          
+          # Find APK
+          if [ -f "./output/app-release.apk" ]; then
+            echo "✅ APK found: ./output/app-release.apk"
+            echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
+          elif [ -f "./output/app.apk" ]; then
+            echo "✅ APK found: ./output/app.apk"
+            mv ./output/app.apk ./output/app-release.apk
+            echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
+          elif [ -f "./app-release.apk" ]; then
+            echo "✅ APK found: ./app-release.apk"
+            mv ./app-release.apk ./output/app-release.apk
+            echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
+          else
+            echo "❌ No APK found in output directory"
+            echo "📂 Searching for APK files..."
+            find . -name "*.apk" 2>/dev/null || echo "No APK files found"
+            exit 1
+          fi
 
       - name: Verify APK
         run: |
-          if [ -f "output/app-release.apk" ]; then
-            echo "APK found"
-          elif [ -f "output/app.apk" ]; then
-            echo "APK found"
-            mv output/app.apk output/app-release.apk
-          else
-            echo "APK not found"
+          APK_PATH="${{ steps.generate_apk.outputs.apk_path }}"
+          
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "❌ APK not found"
             exit 1
           fi
+          
+          echo "🔍 Verifying APK: $APK_PATH"
+          
+          APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null || echo "0")
+          APK_SIZE_MB=$((APK_SIZE / 1048576))
+          
+          if [ "$APK_SIZE" -eq 0 ]; then
+            echo "❌ APK is empty"
+            exit 1
+          fi
+          
+          echo "✅ APK verified (${APK_SIZE_MB} MB)"
+          
+          # Show APK info
+          file "$APK_PATH"
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-${{ github.run_id }}
-          path: output/app-release.apk
+          name: web2apk-${{ inputs.app_name }}-${{ github.run_id }}
+          path: ${{ steps.generate_apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 7
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Web to APK Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App Name | ${{ inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web URL | ${{ inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Icon URL | ${{ inputs.icon_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run URL | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ APK generated successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "📥 Download APK from artifacts section above" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
+          fi
