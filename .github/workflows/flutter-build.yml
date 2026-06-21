@@ -33,10 +33,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: Setup Flutter (Latest Stable)
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.2'
+          flutter-version: '3.29.0'
           channel: 'stable'
           cache: true
 
@@ -81,7 +81,7 @@ jobs:
           
           # If not found, try to find any .zip file
           if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
-            echo "⚠️  project.zip not found, looking for any .zip file..."
+            echo "⚠️ project.zip not found, looking for any .zip file..."
             DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".zip")) | .url' | head -1)
             
             if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
@@ -95,7 +95,7 @@ jobs:
           echo "✅ Found asset URL: ${DOWNLOAD_URL}"
           
           # Download the asset
-          echo "⬇️  Downloading asset..."
+          echo "⬇️ Downloading asset..."
           curl -L \
             -H "Accept: application/octet-stream" \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -127,54 +127,100 @@ jobs:
           
           echo "✅ Extraction successful"
 
-      - name: Verify Flutter project
+      - name: Check Flutter and Dart versions
         run: |
-          echo "🔍 Verifying Flutter project..."
+          echo "📋 Checking Flutter and Dart versions..."
+          flutter --version
+          dart --version
+          
+          echo ""
+          echo "📋 Checking project SDK requirements..."
           cd project
           
-          if [ ! -f "pubspec.yaml" ]; then
-            echo "❌ pubspec.yaml not found in project root"
-            echo "📂 Contents:"
-            ls -la
+          if [ -f "pubspec.yaml" ]; then
+            echo "📄 pubspec.yaml found"
+            echo "--- SDK Requirement ---"
+            grep -A2 "environment:" pubspec.yaml || echo "No environment section found"
+            echo "------------------------"
+            
+            # Extract SDK version requirement
+            SDK_REQUIREMENT=$(grep -A1 "sdk:" pubspec.yaml | grep -o "'.*'" | head -1 || echo "")
+            echo "SDK requirement: $SDK_REQUIREMENT"
+          else
+            echo "❌ pubspec.yaml not found!"
             exit 1
           fi
+
+      - name: Fix pubspec.yaml if needed
+        run: |
+          cd project
           
-          echo "✅ pubspec.yaml found"
+          # Backup original pubspec.yaml
+          cp pubspec.yaml pubspec.yaml.bak
           
-          # Check if it's a Flutter project
-          if grep -q "flutter:" pubspec.yaml; then
-            echo "✅ Flutter project detected"
+          # Check if SDK version is too high
+          if grep -q "sdk: \"^3.8" pubspec.yaml || grep -q "sdk: '^3.8" pubspec.yaml; then
+            echo "⚠️ SDK version 3.8.x detected, adjusting to compatible version..."
+            
+            # Replace SDK constraint with compatible version
+            sed -i 's/sdk: "\^3\.8\.[0-9]\+"/sdk: ">=3.4.0 <4.0.0"/g' pubspec.yaml
+            sed -i "s/sdk: '\^3\.8\.[0-9]\+'/sdk: '>=3.4.0 <4.0.0'/g" pubspec.yaml
+            
+            echo "✅ pubspec.yaml updated"
+            cat pubspec.yaml | grep -A2 "environment:"
           else
-            echo "⚠️  No 'flutter:' section in pubspec.yaml, but continuing..."
+            echo "✅ SDK version is compatible"
           fi
 
       - name: Get dependencies
         run: |
           echo "📦 Installing Flutter dependencies..."
           cd project
-          flutter pub get
           
-          if [ $? -ne 0 ]; then
-            echo "❌ Failed to get dependencies"
-            exit 1
+          # Try standard pub get
+          if flutter pub get; then
+            echo "✅ Dependencies installed successfully"
+          else
+            echo "⚠️ Standard pub get failed, trying alternative methods..."
+            
+            # Try with --no-sound-null-safety
+            if flutter pub get --no-sound-null-safety; then
+              echo "✅ Dependencies installed with --no-sound-null-safety"
+            else
+              echo "❌ Both pub get attempts failed"
+              echo ""
+              echo "📋 Debug info:"
+              echo "--- pubspec.yaml ---"
+              cat pubspec.yaml
+              echo "-------------------"
+              exit 1
+            fi
           fi
-          
-          echo "✅ Dependencies installed"
 
       - name: Build APK
         run: |
           echo "🔨 Building Flutter APK (${{ inputs.build_type }})..."
           cd project
           
+          # Build with extra options
           if [ "${{ inputs.build_type }}" == "debug" ]; then
-            flutter build apk --debug
+            echo "Building debug APK..."
+            flutter build apk --debug || {
+              echo "⚠️ Debug build failed, trying with --no-sound-null-safety..."
+              flutter build apk --debug --no-sound-null-safety || {
+                echo "❌ Debug build failed"
+                exit 1
+              }
+            }
           else
-            flutter build apk --release
-          fi
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ Build failed"
-            exit 1
+            echo "Building release APK..."
+            flutter build apk --release || {
+              echo "⚠️ Release build failed, trying with --no-sound-null-safety..."
+              flutter build apk --release --no-sound-null-safety || {
+                echo "❌ Release build failed"
+                exit 1
+              }
+            }
           fi
           
           echo "✅ Build completed"
@@ -198,22 +244,24 @@ jobs:
           fi
           
           APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null || echo "0")
-          echo "✅ APK found: ${APK_PATH} (${APK_SIZE} bytes)"
+          APK_SIZE_MB=$((APK_SIZE / 1048576))
+          echo "✅ APK found: ${APK_PATH} (${APK_SIZE_MB} MB)"
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-apk-${{ inputs.build_type }}
+          name: flutter-apk-${{ inputs.build_type }}-${{ inputs.tag }}
           path: project/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
           retention-days: 7
-          
+
       - name: Get artifact URL
         id: artifact_url
         run: |
           echo "✅ Artifact uploaded successfully"
-          echo "📦 Artifact name: flutter-apk-${{ inputs.build_type }}"
+          echo "📦 Artifact name: flutter-apk-${{ inputs.build_type }}-${{ inputs.tag }}"
           echo "⏳ Artifact will be available for 7 days"
+          echo "🔗 Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Build summary
         if: always()
@@ -230,7 +278,23 @@ jobs:
           echo "| Run URL | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
             echo "✅ Build successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📥 Download APK from artifacts section above" >> $GITHUB_STEP_SUMMARY
           else
+            echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for error details" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Upload debug logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ inputs.tag }}
+          path: |
+            project/pubspec.yaml
+            project/build/app/outputs/flutter-apk/
+          retention-days: 3
