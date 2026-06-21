@@ -53,19 +53,16 @@ jobs:
 
       - name: Download project ZIP
         run: |
-          echo "📥 Downloading project from: ${{ inputs.release_url }}"
           wget -O project.zip "${{ inputs.release_url }}"
           unzip -q project.zip -d project
-          ls -la project/
 
       - name: Verify Flutter project
         run: |
           cd project
           if [ ! -f "pubspec.yaml" ]; then
-            echo "❌ pubspec.yaml not found!"
+            echo "pubspec.yaml not found"
             exit 1
           fi
-          echo "✅ pubspec.yaml found"
 
       - name: Get dependencies
         run: |
@@ -75,7 +72,6 @@ jobs:
       - name: Build APK
         run: |
           cd project
-          echo "🔨 Building ${{ inputs.build_type }} APK..."
           if [ "${{ inputs.build_type }}" == "debug" ]; then
             flutter build apk --debug
           else
@@ -91,11 +87,8 @@ jobs:
             APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
           fi
           
-          if [ -f "$APK_PATH" ]; then
-            echo "✅ APK found at: $APK_PATH"
-            echo "📦 Size: $(du -h $APK_PATH | cut -f1)"
-          else
-            echo "❌ APK not found!"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "APK not found"
             exit 1
           fi
 
@@ -106,7 +99,3 @@ jobs:
           path: project/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
           retention-days: 7
-
-      - name: Cleanup
-        run: |
-          rm -rf project project.zip
