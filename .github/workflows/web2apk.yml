@@ -1,88 +1,66 @@
-name: Web to APK
+name: Web to APK Builder
 
 on:
   workflow_dispatch:
     inputs:
-      url:
-        description: 'Website URL'
+      web_url:
+        description: 'URL Website'
         required: true
         type: string
       app_name:
-        description: 'App Name'
+        description: 'Nama Aplikasi'
         required: true
         type: string
       icon_url:
-        description: 'Icon URL'
+        description: 'URL Icon (PNG/JPG)'
         required: true
         type: string
 
 jobs:
   build:
-    name: Build Web to APK
+    name: Web to APK
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
-      - name: Install PWA Builder
-        run: npm install -g @pwabuilder/cli
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
 
-      - name: Create PWA Project
+      - name: Setup PWA to APK
         run: |
-          mkdir pwa-app
-          cd pwa-app
-          npm init -y
-          npm install express
+          # Clone PWA to APK converter
+          git clone https://github.com/sanandrea/pwa-to-apk.git
+          cd pwa-to-apk
+          npm install
 
-      - name: Build Web to APK
+      - name: Download icon
         run: |
-          cd pwa-app
-          npx @pwabuilder/cli build --url "${{ inputs.url }}" --name "${{ inputs.app_name }}" --icon "${{ inputs.icon_url }}"
-          ls -la
+          curl -L -o icon.png "${{ inputs.icon_url }}"
+          file icon.png
 
-      - name: Find and Upload APK
+      - name: Convert Web to APK
         run: |
-          # Cari file APK di semua folder
-          find . -name "*.apk" -type f
-          
-          # Jika ada APK, upload
-          if [ -f "pwa-app/output/android/app-release.apk" ]; then
-            echo "APK found at pwa-app/output/android/app-release.apk"
-            cp pwa-app/output/android/app-release.apk ./app.apk
-          elif [ -f "pwa-app/output/app.apk" ]; then
-            echo "APK found at pwa-app/output/app.apk"
-            cp pwa-app/output/app.apk ./app.apk
-          else
-            # Cari di folder lain
-            APK_PATH=$(find . -name "*.apk" -type f | head -1)
-            if [ -n "$APK_PATH" ]; then
-              echo "APK found at $APK_PATH"
-              cp "$APK_PATH" ./app.apk
-            else
-              echo "No APK found, creating dummy"
-              # Buat dummy APK jika tidak ada
-              echo "dummy apk" > app.apk
-            fi
-          fi
+          cd pwa-to-apk
+          node index.js \
+            --url "${{ inputs.web_url }}" \
+            --name "${{ inputs.app_name }}" \
+            --icon ../icon.png \
+            --output ../app.apk
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: web-app
+          name: web-apk
           path: app.apk
-          retention-days: 7
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: web-build-logs
-          path: pwa-app/
-          retention-days: 3
+          if-no-files-found: error
