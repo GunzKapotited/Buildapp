@@ -1,0 +1,81 @@
+name: Web to APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: 'URL Website'
+        required: true
+        type: string
+      app_name:
+        description: 'Nama Aplikasi'
+        required: true
+        type: string
+      icon_url:
+        description: 'URL Icon (PNG/JPG)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: Build Web to APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install PWA2APK
+        run: |
+          npm install -g pwa2apk
+          pwa2apk --version
+
+      - name: Download icon
+        run: |
+          wget -O icon.png "${{ inputs.icon_url }}"
+          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
+
+      - name: Generate APK using PWA2APK
+        run: |
+          pwa2apk \
+            --name "${{ inputs.app_name }}" \
+            --url "${{ inputs.web_url }}" \
+            --icon icon.png \
+            --output ./output \
+            --package "com.app.${{ github.run_id }}"
+
+      - name: Verify APK
+        run: |
+          if [ -f "output/app-release.apk" ]; then
+            echo "APK found"
+          elif [ -f "output/app.apk" ]; then
+            echo "APK found"
+            mv output/app.apk output/app-release.apk
+          else
+            echo "APK not found"
+            exit 1
+          fi
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web2apk-${{ github.run_id }}
+          path: output/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
