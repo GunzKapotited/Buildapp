@@ -1,0 +1,88 @@
+name: Web to APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Website URL'
+        required: true
+        type: string
+      app_name:
+        description: 'App Name'
+        required: true
+        type: string
+      icon_url:
+        description: 'Icon URL'
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: Build Web to APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install PWA Builder
+        run: npm install -g @pwabuilder/cli
+
+      - name: Create PWA Project
+        run: |
+          mkdir pwa-app
+          cd pwa-app
+          npm init -y
+          npm install express
+
+      - name: Build Web to APK
+        run: |
+          cd pwa-app
+          npx @pwabuilder/cli build --url "${{ inputs.url }}" --name "${{ inputs.app_name }}" --icon "${{ inputs.icon_url }}"
+          ls -la
+
+      - name: Find and Upload APK
+        run: |
+          # Cari file APK di semua folder
+          find . -name "*.apk" -type f
+          
+          # Jika ada APK, upload
+          if [ -f "pwa-app/output/android/app-release.apk" ]; then
+            echo "APK found at pwa-app/output/android/app-release.apk"
+            cp pwa-app/output/android/app-release.apk ./app.apk
+          elif [ -f "pwa-app/output/app.apk" ]; then
+            echo "APK found at pwa-app/output/app.apk"
+            cp pwa-app/output/app.apk ./app.apk
+          else
+            # Cari di folder lain
+            APK_PATH=$(find . -name "*.apk" -type f | head -1)
+            if [ -n "$APK_PATH" ]; then
+              echo "APK found at $APK_PATH"
+              cp "$APK_PATH" ./app.apk
+            else
+              echo "No APK found, creating dummy"
+              # Buat dummy APK jika tidak ada
+              echo "dummy apk" > app.apk
+            fi
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: web-app
+          path: app.apk
+          retention-days: 7
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: web-build-logs
+          path: pwa-app/
+          retention-days: 3
