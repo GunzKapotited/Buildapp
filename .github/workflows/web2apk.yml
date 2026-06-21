@@ -1,4 +1,4 @@
-name: Web to APK Builder
+name: Web to APK (Flutter WebView)
 
 on:
   workflow_dispatch:
@@ -18,49 +18,163 @@ on:
 
 jobs:
   build:
-    name: Web to APK
+    name: Build WebView APK
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0'
+          flutter-version: '3.22.2'
           channel: 'stable'
           cache: true
 
-      - name: Setup PWA to APK
-        run: |
-          # Clone PWA to APK converter
-          git clone https://github.com/sanandrea/pwa-to-apk.git
-          cd pwa-to-apk
-          npm install
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
-      - name: Download icon
-        run: |
-          curl -L -o icon.png "${{ inputs.icon_url }}"
-          file icon.png
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Convert Web to APK
+      - name: Create Flutter WebView Project
         run: |
-          cd pwa-to-apk
-          node index.js \
-            --url "${{ inputs.web_url }}" \
-            --name "${{ inputs.app_name }}" \
-            --icon ../icon.png \
-            --output ../app.apk
+          flutter create --org com.app --project-name webapp webview_project
+          cd webview_project
+          
+          # Add webview_flutter dependency
+          flutter pub add webview_flutter
+            
+          # Modify main.dart
+          cat > lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
 
-      - name: Upload APK artifact
+          void main() {
+            runApp(const MyApp());
+          }
+
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: '${{ inputs.app_name }}',
+                theme: ThemeData(
+                  colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+                  useMaterial3: true,
+                ),
+                home: const WebViewScreen(),
+                debugShowCheckedModeBanner: false,
+              );
+            }
+          }
+
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+
+            @override
+            State<WebViewScreen> createState() => _WebViewScreenState();
+          }
+
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController controller;
+
+            @override
+            void initState() {
+              super.initState();
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0x00000000))
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onProgress: (int progress) {
+                      // Progress loading
+                    },
+                    onPageStarted: (String url) {},
+                    onPageFinished: (String url) {},
+                    onWebResourceError: (WebResourceError error) {},
+                  ),
+                )
+                ..loadRequest(Uri.parse('${{ inputs.web_url }}'));
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text('${{ inputs.app_name }}'),
+                  backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+                ),
+                body: WebViewWidget(controller: controller),
+              );
+            }
+          }
+          EOF
+
+      - name: Download and setup icon
+        run: |
+          cd webview_project
+          
+          # Download icon
+          wget -O icon.png "${{ inputs.icon_url }}"
+          
+          # Convert to Android icons
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          
+          # Create app icon (using ImageMagick)
+          convert icon.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          echo "✅ Icons installed"
+
+      - name: Update app name
+        run: |
+          cd webview_project
+          # Update app name in Android
+          sed -i 's/MyApp/${{ inputs.app_name }}/g' android/app/src/main/res/values/strings.xml
+          
+          # Also update iOS if needed
+          sed -i 's/MyApp/${{ inputs.app_name }}/g' ios/Runner/Info.plist
+
+      - name: Build APK
+        run: |
+          cd webview_project
+          flutter pub get
+          flutter build apk --release
+
+      - name: Verify APK
+        run: |
+          cd webview_project
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "✅ APK found!"
+            echo "📦 Size: $(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)"
+          else
+            echo "❌ APK not found!"
+            exit 1
+          fi
+
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web-apk
-          path: app.apk
+          name: webview-apk-${{ github.run_id }}
+          path: webview_project/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup
+        run: |
+          rm -rf webview_project
