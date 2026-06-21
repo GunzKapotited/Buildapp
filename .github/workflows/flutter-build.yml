@@ -25,6 +25,9 @@ jobs:
     name: Build Flutter APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     
     steps:
       - name: Checkout repository
@@ -49,38 +52,138 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip
+          sudo apt-get install -y wget unzip jq
 
-      - name: Download project ZIP
+      - name: Download project ZIP via GitHub API
         run: |
-          wget -O project.zip "${{ inputs.release_url }}"
+          TAG="${{ inputs.tag }}"
+          REPO="${{ github.repository }}"
+          
+          echo "📦 Downloading project.zip for tag: ${TAG}"
+          echo "📍 Repository: ${REPO}"
+          
+          # Get release info using GitHub API
+          echo "🔍 Getting release info..."
+          RELEASE_INFO=$(curl -s \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+          
+          # Check if release exists
+          if [ -z "$RELEASE_INFO" ] || [ "$RELEASE_INFO" == "null" ]; then
+            echo "❌ Release with tag ${TAG} not found"
+            exit 1
+          fi
+          
+          # Try to find project.zip asset
+          echo "🔍 Searching for project.zip asset..."
+          DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name=="project.zip") | .url')
+          
+          # If not found, try to find any .zip file
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+            echo "⚠️  project.zip not found, looking for any .zip file..."
+            DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".zip")) | .url' | head -1)
+            
+            if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+              echo "❌ No ZIP asset found in release"
+              echo "📋 Available assets:"
+              echo "$RELEASE_INFO" | jq -r '.assets[].name' || echo "No assets"
+              exit 1
+            fi
+          fi
+          
+          echo "✅ Found asset URL: ${DOWNLOAD_URL}"
+          
+          # Download the asset
+          echo "⬇️  Downloading asset..."
+          curl -L \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -o project.zip \
+            "$DOWNLOAD_URL"
+          
+          # Verify download
+          if [ ! -f project.zip ]; then
+            echo "❌ project.zip not downloaded"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || stat -f%z project.zip 2>/dev/null || echo "0")
+          if [ "$FILE_SIZE" -eq 0 ]; then
+            echo "❌ Downloaded file is empty"
+            exit 1
+          fi
+          
+          echo "✅ Downloaded project.zip (${FILE_SIZE} bytes)"
+          
+          # Extract the ZIP
+          echo "📂 Extracting project.zip..."
           unzip -q project.zip -d project
+          
+          if [ ! -d "project" ]; then
+            echo "❌ Failed to extract project.zip"
+            exit 1
+          fi
+          
+          echo "✅ Extraction successful"
 
       - name: Verify Flutter project
         run: |
+          echo "🔍 Verifying Flutter project..."
           cd project
+          
           if [ ! -f "pubspec.yaml" ]; then
-            echo "pubspec.yaml not found"
+            echo "❌ pubspec.yaml not found in project root"
+            echo "📂 Contents:"
+            ls -la
             exit 1
+          fi
+          
+          echo "✅ pubspec.yaml found"
+          
+          # Check if it's a Flutter project
+          if grep -q "flutter:" pubspec.yaml; then
+            echo "✅ Flutter project detected"
+          else
+            echo "⚠️  No 'flutter:' section in pubspec.yaml, but continuing..."
           fi
 
       - name: Get dependencies
         run: |
+          echo "📦 Installing Flutter dependencies..."
           cd project
           flutter pub get
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to get dependencies"
+            exit 1
+          fi
+          
+          echo "✅ Dependencies installed"
 
       - name: Build APK
         run: |
+          echo "🔨 Building Flutter APK (${{ inputs.build_type }})..."
           cd project
+          
           if [ "${{ inputs.build_type }}" == "debug" ]; then
             flutter build apk --debug
           else
             flutter build apk --release
           fi
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed"
+            exit 1
+          fi
+          
+          echo "✅ Build completed"
 
       - name: Verify APK
         run: |
+          echo "🔍 Verifying APK..."
           cd project
+          
           if [ "${{ inputs.build_type }}" == "debug" ]; then
             APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
           else
@@ -88,9 +191,14 @@ jobs:
           fi
           
           if [ ! -f "$APK_PATH" ]; then
-            echo "APK not found"
+            echo "❌ APK not found at: ${APK_PATH}"
+            echo "📂 Contents of build directory:"
+            find build -name "*.apk" 2>/dev/null || echo "No APK files found"
             exit 1
           fi
+          
+          APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null || echo "0")
+          echo "✅ APK found: ${APK_PATH} (${APK_SIZE} bytes)"
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
@@ -99,3 +207,30 @@ jobs:
           path: project/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
           retention-days: 7
+          
+      - name: Get artifact URL
+        id: artifact_url
+        run: |
+          echo "✅ Artifact uploaded successfully"
+          echo "📦 Artifact name: flutter-apk-${{ inputs.build_type }}"
+          echo "⏳ Artifact will be available for 7 days"
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | ${{ inputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Type | ${{ inputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | ${{ github.repository }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run URL | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Build successful!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
+          fi
