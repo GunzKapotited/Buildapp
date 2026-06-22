@@ -42,15 +42,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install pwa2apk
-          npm install -g pwa2apk
+          # Install PWABuilder (pengganti pwa2apk)
+          npm install -g pwabuilder
           
           # Install ImageMagick untuk convert icon
           sudo apt-get update
-          sudo apt-get install -y imagemagick
+          sudo apt-get install -y imagemagick wget unzip
           
           # Verify installation
-          pwa2apk --version || echo "pwa2apk installed"
+          pwabuilder --version || echo "PWABuilder installed"
           convert --version || echo "ImageMagick installed"
 
       - name: Download and prepare icon
@@ -75,84 +75,100 @@ jobs:
           
           echo "✅ Icon downloaded successfully"
           
-          # Resize icon to 512x512
-          echo "🔄 Resizing icon to 512x512..."
-          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
+          # Create icons directory with multiple sizes for PWA
+          mkdir -p icons
           
-          echo "✅ Icon prepared:"
-          file icon.png
-          identify icon.png || echo ""
+          # Resize icon to multiple sizes
+          echo "🔄 Creating icons in multiple sizes..."
+          convert icon.png -resize 192x192 -background transparent -gravity center -extent 192x192 icons/icon-192.png
+          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icons/icon-512.png
+          cp icon.png icons/icon.png
+          
+          echo "✅ Icons prepared:"
+          ls -la icons/
 
-      - name: Generate APK using PWA2APK
+      - name: Generate APK using PWABuilder
         id: generate_apk
         run: |
           echo "🔨 Generating APK..."
           echo "📱 App Name: ${{ inputs.app_name }}"
           echo "🌐 Web URL: ${{ inputs.web_url }}"
-          echo "🖼️ Using icon: icon.png"
           
-          # Create output directory
-          mkdir -p output
-          
-          # Try pwa2apk
-          echo "🔄 Method 1: Using pwa2apk..."
-          pwa2apk \
-            --name "${{ inputs.app_name }}" \
-            --url "${{ inputs.web_url }}" \
-            --icon icon.png \
-            --output ./output \
-            --package "com.app.${{ github.run_id }}" || {
-              echo "⚠️ pwa2apk failed, trying alternative method..."
-              
-              # Alternative: Use PWA Builder
-              npm install -g @pwa/builder
-              
-              # Create manifest
-              cat > manifest.json << EOF
+          # Create PWA manifest
+          cat > manifest.json << EOF
+          {
+            "name": "${{ inputs.app_name }}",
+            "short_name": "${{ inputs.app_name }}",
+            "start_url": "${{ inputs.web_url }}",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#000000",
+            "icons": [
               {
-                "name": "${{ inputs.app_name }}",
-                "short_name": "${{ inputs.app_name }}",
-                "start_url": "${{ inputs.web_url }}",
-                "display": "standalone",
-                "background_color": "#ffffff",
-                "theme_color": "#000000",
-                "icons": [
-                  {
-                    "src": "icon.png",
-                    "sizes": "512x512",
-                    "type": "image/png"
-                  }
-                ]
+                "src": "icons/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png"
+              },
+              {
+                "src": "icons/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png"
               }
-              EOF
+            ]
+          }
+          EOF
+          
+          # Build with PWABuilder
+          echo "🔄 Building with PWABuilder..."
+          npx pwabuilder build \
+            --manifest manifest.json \
+            --platform android \
+            --output ./output || {
+              echo "⚠️ PWABuilder build failed, trying alternative..."
               
-              # Build with PWA Builder
-              npx @pwa/builder \
+              # Alternative: Use PWA2APK from GitHub
+              echo "🔄 Method 2: Using PWA2APK from GitHub..."
+              git clone https://github.com/toly1994328/pwa2apk.git
+              cd pwa2apk
+              npm install
+              node index.js \
                 --url "${{ inputs.web_url }}" \
-                --manifest manifest.json \
-                --output ./output
+                --name "${{ inputs.app_name }}" \
+                --icon ../icon.png \
+                --output ../output
+              cd ..
           }
           
           # Check if APK generated
           echo "📂 Checking output directory..."
           ls -la ./output/ || echo "No output directory"
           
-          # Find APK
+          # Find APK in various locations
+          APK_FOUND=""
+          
+          # Check common locations
           if [ -f "./output/app-release.apk" ]; then
-            echo "✅ APK found: ./output/app-release.apk"
-            echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
+            APK_FOUND="./output/app-release.apk"
           elif [ -f "./output/app.apk" ]; then
-            echo "✅ APK found: ./output/app.apk"
-            mv ./output/app.apk ./output/app-release.apk
-            echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
+            APK_FOUND="./output/app.apk"
+          elif [ -f "./output/android/app-release.apk" ]; then
+            APK_FOUND="./output/android/app-release.apk"
           elif [ -f "./app-release.apk" ]; then
-            echo "✅ APK found: ./app-release.apk"
-            mv ./app-release.apk ./output/app-release.apk
+            APK_FOUND="./app-release.apk"
+          else
+            # Search for any APK
+            APK_FOUND=$(find . -name "*.apk" -type f | head -1)
+          fi
+          
+          if [ -n "$APK_FOUND" ] && [ -f "$APK_FOUND" ]; then
+            echo "✅ APK found: $APK_FOUND"
+            mkdir -p output
+            cp "$APK_FOUND" ./output/app-release.apk
             echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
           else
-            echo "❌ No APK found in output directory"
-            echo "📂 Searching for APK files..."
-            find . -name "*.apk" 2>/dev/null || echo "No APK files found"
+            echo "❌ No APK found"
+            echo "📂 Directory structure:"
+            find . -type f -name "*.apk" 2>/dev/null || echo "No APK files"
             exit 1
           fi
 
@@ -161,7 +177,7 @@ jobs:
           APK_PATH="${{ steps.generate_apk.outputs.apk_path }}"
           
           if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-            echo "❌ APK not found"
+            echo "❌ APK not found at: $APK_PATH"
             exit 1
           fi
           
@@ -176,8 +192,6 @@ jobs:
           fi
           
           echo "✅ APK verified (${APK_SIZE_MB} MB)"
-          
-          # Show APK info
           file "$APK_PATH"
 
       - name: Upload APK as artifact
@@ -197,7 +211,6 @@ jobs:
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| App Name | ${{ inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Web URL | ${{ inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Icon URL | ${{ inputs.icon_url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Run URL | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
@@ -209,4 +222,6 @@ jobs:
           else
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for error details" >> $GITHUB_STEP_SUMMARY
           fi
