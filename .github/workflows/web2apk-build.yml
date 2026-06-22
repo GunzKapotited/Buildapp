@@ -93,6 +93,11 @@ jobs:
             "platform-tools" \
             "tools" || true
 
+      - name: Clean Gradle cache
+        run: |
+          rm -rf ~/.gradle/caches/
+          mkdir -p ~/.gradle/caches/
+
       - name: Set environment variables
         id: vars
         run: |
@@ -361,9 +366,8 @@ jobs:
           }
           
           repositories {
-            flatDir {
-              dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
-            }
+            google()
+            mavenCentral()
           }
           
           dependencies {
@@ -375,11 +379,44 @@ jobs:
           }
           EOF
 
+      - name: Update root build.gradle
+        run: |
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+            repositories {
+              google()
+              mavenCentral()
+            }
+            dependencies {
+              classpath 'com.android.tools.build:gradle:7.4.2'
+            }
+          }
+          
+          allprojects {
+            repositories {
+              google()
+              mavenCentral()
+            }
+          }
+          
+          task clean(type: Delete) {
+            delete rootProject.buildDir
+          }
+          EOF
+
+      - name: Update gradle.properties
+        run: |
+          cat >> android/gradle.properties << EOF
+          org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+
       - name: Build APK with Gradle
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease --no-daemon --stacktrace
           cd ..
 
       - name: Find and rename APK
