@@ -1,4 +1,4 @@
-# web2apk-build.yml - Fixed Version (Menggunakan Android Studio langsung)
+# web2apk-build.yml - Fixed (tanpa gradle wrapper download)
 name: Build Web to APK
 
 on:
@@ -55,21 +55,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle
-        run: |
-          mkdir -p android/gradle/wrapper
-          
-          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          
-          curl -L https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar -o android/gradle/wrapper/gradle-wrapper.jar
-          chmod +x android/gradlew
-
       - name: Create Android Project Structure
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
@@ -93,10 +78,10 @@ jobs:
           PACKAGE_NAME="${{ github.event.inputs.app_package }}"
           APP_NAME="${{ github.event.inputs.app_name }}"
           
-          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          cat > android/app/src/main/AndroidManifest.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="PACKAGE_PLACEHOLDER">
+              package="${PACKAGE_NAME}">
               
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -104,7 +89,7 @@ jobs:
               <application
                   android:allowBackup="true"
                   android:icon="@mipmap/ic_launcher"
-                  android:label="APP_NAME_PLACEHOLDER"
+                  android:label="${APP_NAME}"
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.Light.NoActionBar"
@@ -123,10 +108,6 @@ jobs:
               </application>
           </manifest>
           EOF
-          
-          # Replace placeholders
-          sed -i "s/PACKAGE_PLACEHOLDER/${PACKAGE_NAME}/g" android/app/src/main/AndroidManifest.xml
-          sed -i "s/APP_NAME_PLACEHOLDER/${APP_NAME}/g" android/app/src/main/AndroidManifest.xml
 
       - name: Create MainActivity.java
         run: |
@@ -134,8 +115,8 @@ jobs:
           WEB_URL="${{ github.event.inputs.web_url }}"
           PACKAGE_PATH="${PACKAGE_NAME//.//}"
           
-          cat > android/app/src/main/java/${PACKAGE_PATH}/MainActivity.java << 'EOF'
-          package PACKAGE_PLACEHOLDER;
+          cat > android/app/src/main/java/${PACKAGE_PATH}/MainActivity.java << EOF
+          package ${PACKAGE_NAME};
           
           import android.os.Bundle;
           import android.webkit.WebView;
@@ -143,19 +124,16 @@ jobs:
           import android.webkit.WebSettings;
           import android.webkit.WebChromeClient;
           import android.webkit.WebResourceRequest;
-          import android.webkit.WebResourceError;
           import android.os.Build;
           import android.view.KeyEvent;
           import android.widget.ProgressBar;
           import android.view.View;
           import android.widget.FrameLayout;
           import androidx.appcompat.app.AppCompatActivity;
-          import android.content.pm.ActivityInfo;
           
           public class MainActivity extends AppCompatActivity {
               private WebView webView;
               private ProgressBar progressBar;
-              private FrameLayout container;
               
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -164,7 +142,6 @@ jobs:
                   
                   webView = findViewById(R.id.webView);
                   progressBar = findViewById(R.id.progressBar);
-                  container = findViewById(R.id.container);
                   
                   WebSettings webSettings = webView.getSettings();
                   webSettings.setJavaScriptEnabled(true);
@@ -194,11 +171,6 @@ jobs:
                       public void onPageFinished(WebView view, String url) {
                           progressBar.setVisibility(View.GONE);
                       }
-                      
-                      @Override
-                      public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                          progressBar.setVisibility(View.GONE);
-                      }
                   });
                   
                   webView.setWebChromeClient(new WebChromeClient() {
@@ -213,7 +185,7 @@ jobs:
                       }
                   });
                   
-                  webView.loadUrl("WEB_URL_PLACEHOLDER");
+                  webView.loadUrl("${WEB_URL}");
               }
               
               @Override
@@ -230,17 +202,12 @@ jobs:
               }
           }
           EOF
-          
-          # Replace placeholders
-          sed -i "s/PACKAGE_PLACEHOLDER/${PACKAGE_NAME}/g" android/app/src/main/java/${PACKAGE_PATH}/MainActivity.java
-          sed -i "s|WEB_URL_PLACEHOLDER|${WEB_URL}|g" android/app/src/main/java/${PACKAGE_PATH}/MainActivity.java
 
       - name: Create Layout
         run: |
           cat > android/app/src/main/res/layout/activity_main.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:id="@+id/container"
               android:layout_width="match_parent"
               android:layout_height="match_parent">
               
@@ -274,59 +241,45 @@ jobs:
       - name: Download Custom Icon
         if: github.event.inputs.icon_url != ''
         run: |
-          # Install ImageMagick for icon processing
           sudo apt-get update
           sudo apt-get install -y imagemagick
           
           curl -L "${{ github.event.inputs.icon_url }}" -o icon.png
           
-          # Convert to Android icon sizes
           convert icon.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
           convert icon.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
           convert icon.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert icon.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           
-          # Create round icons
-          convert icon.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
-          convert icon.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
-          convert icon.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
-          convert icon.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
-          convert icon.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-          
-          echo "✅ Icons downloaded and converted"
+          cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
 
       - name: Create Default Icons
         if: github.event.inputs.icon_url == ''
         run: |
-          # Create simple colored icons
           sudo apt-get update
           sudo apt-get install -y imagemagick
           
-          # Create icon with app name
           for size in 72 48 96 144 192; do
             convert -size ${size}x${size} xc:#2196F3 \
               -gravity center \
-              -font Helvetica -pointsize $((size/6)) \
-              -fill white -annotate 0 "${{ github.event.inputs.app_name }}" \
+              -font Helvetica -pointsize $((size/4)) \
+              -fill white -annotate 0 "$(echo "${{ github.event.inputs.app_name }}" | cut -c1-2)" \
               android/app/src/main/res/mipmap-hdpi/ic_launcher.png
               
-            # Create round icon
-            convert -size ${size}x${size} xc:#2196F3 \
-              -gravity center \
-              -font Helvetica -pointsize $((size/6)) \
-              -fill white -annotate 0 "${{ github.event.inputs.app_name }}" \
-              android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+            cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
           done
-          
-          echo "✅ Default icons created"
 
-      - name: Create app/build.gradle
+      - name: Create Gradle Files
         run: |
           PACKAGE_NAME="${{ github.event.inputs.app_package }}"
-          APP_NAME="${{ github.event.inputs.app_name }}"
           
-          cat > android/app/build.gradle << 'EOF'
+          # app/build.gradle
+          cat > android/app/build.gradle << EOF
           plugins {
               id 'com.android.application'
           }
@@ -335,13 +288,11 @@ jobs:
               compileSdk 34
               
               defaultConfig {
-                  applicationId "PACKAGE_PLACEHOLDER"
+                  applicationId "${PACKAGE_NAME}"
                   minSdk 21
                   targetSdk 34
                   versionCode 1
                   versionName "1.0"
-                  
-                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
               }
               
               buildTypes {
@@ -350,6 +301,7 @@ jobs:
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
+              
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
                   targetCompatibility JavaVersion.VERSION_1_8
@@ -359,14 +311,10 @@ jobs:
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.webkit:webkit:1.9.0'
-              implementation 'com.google.android.material:material:1.11.0'
           }
           EOF
           
-          sed -i "s/PACKAGE_PLACEHOLDER/${PACKAGE_NAME}/g" android/app/build.gradle
-
-      - name: Create settings.gradle
-        run: |
+          # settings.gradle
           cat > android/settings.gradle << 'EOF'
           pluginManagement {
               repositories {
@@ -384,9 +332,8 @@ jobs:
           rootProject.name = "${{ github.event.inputs.app_name }}"
           include ':app'
           EOF
-
-      - name: Create build.gradle (root)
-        run: |
+          
+          # build.gradle root
           cat > android/build.gradle << 'EOF'
           buildscript {
               repositories {
@@ -404,39 +351,34 @@ jobs:
                   mavenCentral()
               }
           }
-          
-          tasks.register('clean', Delete) {
-              delete rootProject.buildDir
-          }
           EOF
-
-      - name: Create gradle.properties
-        run: |
+          
+          # gradle.properties
           cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
+          org.gradle.jvmargs=-Xmx2048m
           android.useAndroidX=true
           android.enableJetifier=true
           EOF
 
-      - name: Create gradlew script
+      - name: Setup Gradle Wrapper
         run: |
-          cat > android/gradlew << 'EOF'
-          #!/bin/sh
-          exec java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain "$@"
-          EOF
-          chmod +x android/gradlew
+          cd android
+          gradle wrapper --gradle-version 8.4
+          chmod +x gradlew
 
       - name: Build APK
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
 
-      - name: Verify APK
+      - name: Verify and Upload APK
         run: |
-          if [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
+          APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
+          
+          if [ -f "$APK_PATH" ]; then
             echo "✅ APK built successfully!"
-            ls -la android/app/build/outputs/apk/release/
-            APK_SIZE=$(du -h android/app/build/outputs/apk/release/app-release.apk | cut -f1)
+            ls -la "$APK_PATH"
+            APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
             echo "📦 APK Size: $APK_SIZE"
           else
             echo "❌ APK not found!"
@@ -447,80 +389,33 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-${{ github.event.inputs.app_name }}
+          name: ${{ github.event.inputs.app_name }}-APK
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 7
 
       - name: Create Release
-        if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: web2apk-${{ github.run_number }}
-          name: "Web2APK - ${{ github.event.inputs.app_name }}"
+          name: "📱 ${{ github.event.inputs.app_name }}"
           body: |
-            ## 📱 Web2APK Build
+            ## 📱 ${{ github.event.inputs.app_name }}
             
-            **App Name:** ${{ github.event.inputs.app_name }}
-            **Website:** ${{ github.event.inputs.web_url }}
-            **Build Date:** $(date)
-            **Run ID:** ${{ github.run_id }}
+            | Detail | Info |
+            |--------|------|
+            | **App Name** | ${{ github.event.inputs.app_name }} |
+            | **Website** | ${{ github.event.inputs.web_url }} |
+            | **Package** | ${{ github.event.inputs.app_package }} |
+            | **Build Date** | $(date) |
+            | **Run ID** | ${{ github.run_id }} |
             
-            ### 📦 Download
-            Download the APK file below.
+            ### 📥 Download
+            [⬇️ Download APK](https://github.com/${{ github.repository }}/releases/download/web2apk-${{ github.run_number }}/app-release.apk)
+            
+            ---
+            *Built with GitHub Actions*
           files: android/app/build/outputs/apk/release/*.apk
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Deploy to GitHub Pages
-        if: success()
-        run: |
-          mkdir -p deploy
-          cp android/app/build/outputs/apk/release/*.apk deploy/
-          
-          cat > deploy/index.html << 'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-              <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>${{ github.event.inputs.app_name }}</title>
-              <style>
-                  body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-                  .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                  h1 { color: #2196F3; }
-                  .apk-btn { display: inline-block; padding: 15px 30px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px; font-size: 18px; margin: 20px 0; }
-                  .apk-btn:hover { background: #45a049; }
-                  .info { color: #666; font-size: 14px; }
-              </style>
-          </head>
-          <body>
-              <div class="container">
-                  <h1>📱 ${{ github.event.inputs.app_name }}</h1>
-                  <p>APK siap diunduh!</p>
-                  <a href="$(ls *.apk)" class="apk-btn" download>⬇️ Download APK</a>
-                  <p class="info">Build #${{ github.run_number }}</p>
-                  <p class="info">Website: ${{ github.event.inputs.web_url }}</p>
-              </div>
-          </body>
-          </html>
-          EOF
-
-      - name: Deploy to GitHub Pages
-        if: success()
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./deploy
-          destination_dir: web2apk-${{ github.run_number }}
-          keep_files: true
-
-      - name: Get Download URL
-        if: success()
-        run: |
-          echo "✅ APK Download URL:"
-          echo "https://github.com/${{ github.repository }}/releases/download/web2apk-${{ github.run_number }}/app-release.apk"
-          echo ""
-          echo "📱 App Name: ${{ github.event.inputs.app_name }}"
-          echo "🌐 Website: ${{ github.event.inputs.web_url }}"
