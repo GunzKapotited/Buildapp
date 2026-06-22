@@ -65,6 +65,26 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # FIX 1: Cache Gradle untuk menghindari download ulang
+      - name: Cache Gradle
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # FIX 2: Cache Capacitor dan npm dependencies
+      - name: Cache npm
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
       - name: Create package.json
         run: |
           npm init -y
@@ -354,18 +374,51 @@ jobs:
           }
           EOF
 
+      # FIX 3: Update gradle wrapper dengan retry dan delay
       - name: Update gradle wrapper to 8.7
         run: |
           cd android
-          ./gradlew wrapper --gradle-version=8.7 --distribution-type=all
+          # Hapus cache gradle wrapper yang corrupt
+          rm -rf ~/.gradle/caches/jars-9/ || true
+          rm -rf ~/.gradle/wrapper/dists/gradle-8.7-all || true
+          
+          # Update wrapper dengan retry
+          for i in {1..3}; do
+            echo "Attempt $i to update gradle wrapper..."
+            if ./gradlew wrapper --gradle-version=8.7 --distribution-type=all --no-daemon; then
+              echo "Gradle wrapper update successful"
+              break
+            else
+              echo "Attempt $i failed, waiting 10 seconds..."
+              sleep 10
+              # Bersihkan cache lagi
+              rm -rf ~/.gradle/caches/jars-9/ || true
+            fi
+          done
           cd ..
 
+      # FIX 4: Build APK dengan retry dan cleanup
       - name: Build APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew clean
-          ./gradlew assembleRelease --no-daemon
+          
+          # Bersihkan dan build dengan retry
+          for i in {1..3}; do
+            echo "Attempt $i to build APK..."
+            rm -rf ~/.gradle/caches/jars-9/ || true
+            rm -rf ~/.gradle/caches/modules-2/files-2.1/org.bouncycastle/ || true
+            
+            if ./gradlew clean assembleRelease --no-daemon --stacktrace; then
+              echo "Build successful"
+              break
+            else
+              echo "Build attempt $i failed, waiting 15 seconds..."
+              sleep 15
+              # Kill gradle daemon yang mungkin bermasalah
+              ./gradlew --stop || true
+            fi
+          done
           cd ..
 
       - name: Find and rename APK
