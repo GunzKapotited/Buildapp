@@ -354,12 +354,10 @@ jobs:
           }
           EOF
 
-      - name: Use Gradle 7.6.1
+      - name: Replace Gradle version
         run: |
           cd android
           sed -i 's/gradle-8.2.1-all.zip/gradle-7.6.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
-          sed -i 's/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.2.1-all.zip/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-7.6.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
-          cat gradle/wrapper/gradle-wrapper.properties
           cd ..
 
       - name: Build APK with Gradle
