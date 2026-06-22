@@ -17,7 +17,7 @@ on:
         description: 'URL Icon (PNG, minimal 512x512)'
         required: false
         type: string
-        default: 'https://raw.githubusercontent.com/GunzKapotited/Buildapp/main/icon.png'
+        default: ''
       package_name:
         description: 'Package Name (com.example.app)'
         required: false
@@ -56,14 +56,9 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Create package.json
+      - name: Install Capacitor
         run: |
-          npm init -y
-          npm install -g pwa2apk cordova-res @capacitor/cli @capacitor/android
-
-      - name: Install dependencies locally
-        run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install -g @capacitor/cli @capacitor/android @capacitor/core
 
       - name: Install Android SDK dependencies
         run: |
@@ -74,7 +69,8 @@ jobs:
             gradle \
             wget \
             unzip \
-            imagemagick
+            imagemagick \
+            jq
 
       - name: Setup Android SDK
         run: |
@@ -84,10 +80,8 @@ jobs:
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "PATH=$PATH:/usr/lib/android-sdk/tools:/usr/lib/android-sdk/platform-tools" >> $GITHUB_ENV
           
-          # Accept Android licenses
           yes | sudo /usr/lib/android-sdk/tools/bin/sdkmanager --licenses || true
           
-          # Install required Android packages
           sudo /usr/lib/android-sdk/tools/bin/sdkmanager \
             "platforms;android-33" \
             "build-tools;33.0.0" \
@@ -97,7 +91,6 @@ jobs:
       - name: Set environment variables
         id: vars
         run: |
-          # Extract domain from URL
           WEB_URL="${{ github.event.inputs.web_url }}"
           DOMAIN=$(echo "$WEB_URL" | sed -E 's|^https?://||' | cut -d'/' -f1)
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
@@ -108,9 +101,11 @@ jobs:
           echo "orientation=${{ github.event.inputs.orientation }}" >> $GITHUB_OUTPUT
           echo "display_mode=${{ github.event.inputs.display_mode }}" >> $GITHUB_OUTPUT
 
-      - name: Create PWA2APK config
+      - name: Create web directory and files
         run: |
-          cat > pwa2apk-config.json << EOF
+          mkdir -p www
+          
+          cat > www/manifest.json << EOF
           {
             "name": "${{ steps.vars.outputs.app_name }}",
             "short_name": "${{ steps.vars.outputs.app_name }}",
@@ -121,7 +116,7 @@ jobs:
             "theme_color": "#1976d2",
             "icons": [
               {
-                "src": "${{ steps.vars.outputs.icon_url }}",
+                "src": "icon.png",
                 "sizes": "512x512",
                 "type": "image/png",
                 "purpose": "any maskable"
@@ -129,62 +124,17 @@ jobs:
             ]
           }
           EOF
-          
-          cat pwa2apk-config.json
 
-      - name: Create Capacitor config
+      - name: Download or create icon
         run: |
-          cat > capacitor.config.json << EOF
-          {
-            "appId": "${{ steps.vars.outputs.package_name }}",
-            "appName": "${{ steps.vars.outputs.app_name }}",
-            "webDir": "www",
-            "server": {
-              "url": "${{ steps.vars.outputs.web_url }}",
-              "cleartext": true,
-              "androidScheme": "https"
-            },
-            "android": {
-              "allowMixedContent": true,
-              "captureInput": true,
-              "webContentsDebuggingEnabled": true
-            },
-            "plugins": {
-              "SplashScreen": {
-                "launchShowDuration": 2000,
-                "launchAutoHide": true,
-                "backgroundColor": "#ffffff",
-                "androidSplashResourceName": "splash",
-                "androidScaleType": "CENTER_CROP",
-                "showSpinner": false,
-                "androidSpinnerStyle": "large",
-                "iosSpinnerStyle": "small",
-                "spinnerColor": "#999999",
-                "splashFullScreen": true,
-                "splashImmersive": true,
-                "layoutName": "launch_screen",
-                "useDialog": false
-              }
-            }
-          }
-          EOF
-          
-          cat capacitor.config.json
-
-      - name: Download icon
-        run: |
-          mkdir -p www
-          if [ -n "${{ steps.vars.outputs.icon_url }}" ] && [ "${{ steps.vars.outputs.icon_url }}" != "null" ]; then
-            wget -O www/icon.png "${{ steps.vars.outputs.icon_url }}" || echo "Icon download failed, using default"
+          if [ -n "${{ steps.vars.outputs.icon_url }}" ]; then
+            wget -O www/icon.png "${{ steps.vars.outputs.icon_url }}" || echo "Icon download failed"
           fi
           
-          # Create default icon if download failed
           if [ ! -f www/icon.png ]; then
             echo "Creating default icon..."
-            if command -v convert &> /dev/null; then
-              convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
-                -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/icon.png || true
-            fi
+            convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
+              -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/icon.png || true
           fi
 
       - name: Create splash screen
@@ -194,7 +144,7 @@ jobs:
               -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/splash.png || true
           fi
 
-      - name: Create index.html for webview
+      - name: Create index.html
         run: |
           cat > www/index.html << 'EOF'
           <!DOCTYPE html>
@@ -308,33 +258,8 @@ jobs:
           </html>
           EOF
           
-          # Replace placeholders
           sed -i "s|APP_NAME_PLACEHOLDER|${{ steps.vars.outputs.app_name }}|g" www/index.html
           sed -i "s|WEB_URL_PLACEHOLDER|${{ steps.vars.outputs.web_url }}|g" www/index.html
-
-      - name: Create manifest.json
-        run: |
-          cat > www/manifest.json << EOF
-          {
-            "name": "${{ steps.vars.outputs.app_name }}",
-            "short_name": "${{ steps.vars.outputs.app_name }}",
-            "start_url": "${{ steps.vars.outputs.web_url }}",
-            "display": "${{ steps.vars.outputs.display_mode }}",
-            "orientation": "${{ steps.vars.outputs.orientation }}",
-            "background_color": "#ffffff",
-            "theme_color": "#1976d2",
-            "icons": [
-              {
-                "src": "icon.png",
-                "sizes": "512x512",
-                "type": "image/png",
-                "purpose": "any maskable"
-              }
-            ],
-            "scope": "/",
-            "description": "${{ steps.vars.outputs.app_name }} Web App"
-          }
-          EOF
 
       - name: Initialize Capacitor
         run: |
@@ -346,7 +271,6 @@ jobs:
           
           npx cap add android
           
-          # Update Android manifest
           cat > android/app/src/main/AndroidManifest.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
