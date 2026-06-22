@@ -56,9 +56,14 @@ jobs:
         with:
           node-version: '18'
 
+      - name: Create package.json
+        run: |
+          npm init -y
+
       - name: Install Capacitor
         run: |
-          npm install -g @capacitor/cli @capacitor/android @capacitor/core
+          npm install @capacitor/cli @capacitor/android @capacitor/core
+          npm install -g @capacitor/cli
 
       - name: Install Android SDK dependencies
         run: |
