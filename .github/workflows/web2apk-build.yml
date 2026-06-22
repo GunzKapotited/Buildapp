@@ -35,39 +35,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          
+        
+      # FIXED: Setup Node.js WITHOUT cache
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          
-      # FIXED: Create package.json first before installing dependencies
-      - name: Create package.json
-        run: |
-          cat > package.json << EOF
-          {
-            "name": "web2apk-builder",
-            "version": "1.0.0",
-            "description": "Web2APK Builder",
-            "scripts": {
-              "build": "echo 'Building...'"
-            },
-            "dependencies": {
-              "@capacitor/cli": "latest",
-              "@capacitor/android": "latest",
-              "@capacitor/core": "latest",
-              "web2apk-cli": "latest",
-              "pwabuilder": "latest"
-            }
-          }
-          EOF
+          # HAPUS CACHE! GA PAKE LOCK FILE
+          cache: ''  # <-- INI YANG DIPERBAIKI
           
       - name: Install dependencies
         run: |
-          npm install --no-package-lock
+          # Install packages langsung global
+          npm install -g @capacitor/cli @capacitor/android @capacitor/core
+          npm install -g web2apk-cli
           
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -78,10 +59,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0'
+          packages: 'platforms;android-34'
           
       - name: Create Web2APK config
-        id: create_config
         run: |
           mkdir -p web2apk-build
           cat > web2apk-build/config.json << EOF
@@ -91,195 +71,84 @@ jobs:
             "package_name": "${{ github.event.inputs.package_name || 'com.web2apk.app' }}",
             "version": "1.0.0",
             "version_code": 1,
-            "icon_url": "${{ github.event.inputs.icon_url || '' }}",
-            "orientation": "portrait",
-            "display_mode": "standalone",
-            "navigation_color": "#000000",
-            "background_color": "#FFFFFF",
-            "theme_color": "#2196F3",
-            "android_target_sdk": 34,
-            "android_min_sdk": 21
+            "icon_url": "${{ github.event.inputs.icon_url || '' }}"
           }
           EOF
-          echo "Config created successfully"
           
-      - name: Create Capacitor project
+      - name: Build Web2APK
         run: |
-          mkdir -p capacitor-app
-          cd capacitor-app
+          # Buat folder project
+          mkdir -p webapp
+          cd webapp
           
-          # Initialize Capacitor
-          npx @capacitor/cli init "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.package_name || 'com.web2apk.app' }}"
-          
-          # Add Android platform
-          npx @capacitor/cli add android
-          
-          # Create www directory
-          mkdir -p www
-          
-          # Create index.html
-          cat > www/index.html << HTML
+          # Buat file HTML sederhana
+          cat > index.html << EOF
           <!DOCTYPE html>
           <html>
           <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>${{ github.event.inputs.app_name }}</title>
-            <style>
-              body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
-              iframe { width: 100vw; height: 100vh; border: none; }
-            </style>
           </head>
-          <body>
-            <iframe src="${{ github.event.inputs.web_url }}"></iframe>
+          <body style="margin:0;padding:0;height:100vh;overflow:hidden;">
+            <iframe src="${{ github.event.inputs.web_url }}" style="width:100%;height:100%;border:none;"></iframe>
           </body>
           </html>
-          HTML
-          
-          # Update capacitor.config.json
-          cat > capacitor.config.json << EOF
-          {
-            "appId": "${{ github.event.inputs.package_name || 'com.web2apk.app' }}",
-            "appName": "${{ github.event.inputs.app_name }}",
-            "webDir": "www",
-            "bundledWebRuntime": false,
-            "server": {
-              "androidScheme": "https",
-              "iosScheme": "https"
-            }
-          }
           EOF
           
-      - name: Build Android APK with Capacitor
-        run: |
-          cd capacitor-app
-          
-          # Create debug keystore if not exists
-          if [ ! -f ../debug.keystore ]; then
-            cd ..
-            keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass android -keypass android \
-              -dname "CN=Android Debug, OU=Android, O=Android, L=Unknown, ST=Unknown, C=US"
-            cd capacitor-app
-          fi
-          
-          # Sync Capacitor
-          npx @capacitor/cli sync android
-          
-          # Build Android - use debug first
-          npx @capacitor/cli build android --debug
-          
-          # Find the generated APK
-          find android/app/build/outputs -name "*.apk" -exec cp {} ../app.apk \;
-          
-          # If no APK found, try building again with different flags
-          if [ ! -f ../app.apk ]; then
-            echo "No APK found, trying alternative build..."
-            cd android
-            chmod +x gradlew
-            ./gradlew assembleDebug
-            cd ..
-            find android/app/build/outputs -name "*.apk" -exec cp {} ../app.apk \;
-          fi
-          
-          cd ..
-          
-      - name: Alternative build using web2apk-cli
-        id: build_alternative
-        if: failure() || !success()
-        run: |
-          # Use web2apk-cli as fallback
-          mkdir -p build-output
-          
-          # Create manifest.json
+          # Buat manifest
           cat > manifest.json << EOF
           {
             "name": "${{ github.event.inputs.app_name }}",
             "short_name": "${{ github.event.inputs.app_name }}",
-            "start_url": "${{ github.event.inputs.web_url }}",
+            "start_url": "index.html",
             "display": "standalone",
-            "orientation": "portrait",
             "background_color": "#FFFFFF",
             "theme_color": "#2196F3"
           }
           EOF
           
-          # Try web2apk-cli
-          npx web2apk-cli \
-            --url "${{ github.event.inputs.web_url }}" \
-            --name "${{ github.event.inputs.app_name }}" \
-            --package "${{ github.event.inputs.package_name || 'com.web2apk.app' }}" \
-            --output build-output/app.apk \
-            --icon "${{ github.event.inputs.icon_url }}" || echo "web2apk-cli failed"
+          # Install dependencies untuk project ini
+          npm init -y
+          npm install @capacitor/cli @capacitor/android @capacitor/core
           
-      - name: Final APK collection
-        id: collect_apk
-        run: |
-          mkdir -p final-output
+          # Init Capacitor
+          npx cap init "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.package_name || 'com.web2apk.app' }}"
+          npx cap add android
           
-          # Check for APK from Capacitor
-          if [ -f capacitor-app/app.apk ]; then
-            cp capacitor-app/app.apk final-output/app.apk
-            echo "✅ APK found from Capacitor build"
-            APK_SIZE=$(du -h final-output/app.apk | cut -f1)
-            echo "📦 APK Size: $APK_SIZE"
-          # Check for APK from web2apk-cli
-          elif [ -f build-output/app.apk ]; then
-            cp build-output/app.apk final-output/app.apk
-            echo "✅ APK found from web2apk-cli build"
-          else
-            # Create build info
-            echo "⚠️ No APK found. Creating build info..."
-            cat > final-output/build-info.txt << EOF
-            App Name: ${{ github.event.inputs.app_name }}
-            Web URL: ${{ github.event.inputs.web_url }}
-            Package: ${{ github.event.inputs.package_name || 'com.web2apk.app' }}
-            Build Date: $(date)
-            Status: APK build failed - check logs for details
-            EOF
-          fi
+          # Copy file ke www
+          cp index.html www/
+          cp manifest.json www/
           
-      - name: Upload APK as artifact
+          # Build APK
+          npx cap sync android
+          npx cap open android || true
+          
+          # Build pakai gradle
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          cd ..
+          
+          # Copy APK ke output
+          mkdir -p ../output
+          find android/app/build/outputs -name "*.apk" -exec cp {} ../output/app.apk \;
+          cd ..
+          
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: web2apk-${{ github.event.inputs.app_name }}
-          path: |
-            final-output/*
-          if-no-files-found: ignore
+          path: output/*
           
       - name: Create Release
-        id: create_release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
           name: "Web2APK - ${{ github.event.inputs.app_name }}"
           tag_name: "web2apk-${{ github.run_number }}"
-          files: |
-            final-output/*
+          files: output/*
           draft: false
           prerelease: false
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Output build results
-        id: output_results
-        run: |
-          echo "## 🎉 Web2APK Build Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📱 App Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **App Name:** ${{ github.event.inputs.app_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Web URL:** ${{ github.event.inputs.web_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Package:** ${{ github.event.inputs.package_name || 'com.web2apk.app' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Downloads" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f final-output/app.apk ]; then
-            APK_SIZE=$(du -h final-output/app.apk | cut -f1)
-            echo "- ✅ APK built successfully" >> $GITHUB_STEP_SUMMARY
-            echo "- 📦 Size: $APK_SIZE" >> $GITHUB_STEP_SUMMARY
-            echo "- 🔗 Download from artifacts or release" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- ⚠️ APK build failed" >> $GITHUB_STEP_SUMMARY
-            echo "- 📄 Check build logs for details" >> $GITHUB_STEP_SUMMARY
-          fi
