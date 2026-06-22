@@ -88,8 +88,8 @@ jobs:
 
       - name: Build APK with PWABuilder CLI
         run: |
-          # Download PWABuilder CLI
-          wget -O pwabuilder https://github.com/pwa-builder/pwabuilder-cli/releases/latest/download/pwabuilder-cli-linux
+          # Download PWABuilder CLI - PERBAIKI URL
+          wget -O pwabuilder https://github.com/pwa-builder/pwabuilder-cli/releases/download/v2.0.3/pwabuilder-cli-linux-x64
           chmod +x pwabuilder
           
           # Create manifest
@@ -111,7 +111,7 @@ jobs:
           }
           EOF
           
-          # BUILD - pake manifestPath
+          # BUILD
           ./pwabuilder build --manifestPath manifest.json --platform android --output ./output
 
       - name: Upload APK
