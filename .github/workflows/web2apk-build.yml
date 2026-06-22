@@ -1,214 +1,38 @@
-name: Web2APK Builder
+name: Web2APK - DOCKER METHOD (PASTI JALAN)
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'URL Website untuk dijadikan APK'
+        description: 'URL Website'
         required: true
         type: string
-        default: 'https://example.com'
       app_name:
         description: 'Nama Aplikasi'
         required: true
         type: string
-        default: 'MyWebApp'
-      icon_url:
-        description: 'URL Icon (opsional)'
-        required: false
-        type: string
-        default: ''
-      app_id:
-        description: 'Package ID (opsional)'
-        required: false
-        type: string
-        default: ''
-      version:
-        description: 'Versi Aplikasi'
-        required: false
-        type: string
-        default: '1.0.0'
-
-env:
-  APP_NAME: ${{ github.event.inputs.app_name }}
-  WEB_URL: ${{ github.event.inputs.web_url }}
-  ICON_URL: ${{ github.event.inputs.icon_url }}
-  APP_ID: ${{ github.event.inputs.app_id }}
-  VERSION: ${{ github.event.inputs.version }}
 
 jobs:
-  build-web2apk:
-    name: Build Web to APK
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '11'  # PAKAI JAVA 11 - LEBIH STABLE UNTUK GRADLE
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-33 build-tools;33.0.0'
-
-      - name: Install dependencies
+      - name: Build with Docker
         run: |
-          npm install -g cordova@11.1.0  # PAKAI VERSION LAMA YANG STABLE
-          npm install -g cordova-res
-          echo "✅ Dependencies installed"
-
-      - name: Create Cordova project
-        run: |
-          APP_ID_FIXED="${APP_ID:-com.webapp.$(echo "${{ env.APP_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g' | cut -c1-15)}"
-          
-          echo "📱 Creating app: ${{ env.APP_NAME }} ($APP_ID_FIXED)"
-          
-          # Create project
-          cordova create app "$APP_ID_FIXED" "${{ env.APP_NAME }}"
-          cd app
-          
-          # Add platform with specific version
-          cordova platform add android@11.0.0
-          
-          # Setup config.xml
-          cat > config.xml << EOF
-          <?xml version='1.0' encoding='utf-8'?>
-          <widget id="$APP_ID_FIXED" version="${{ env.VERSION }}" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
-              <name>${{ env.APP_NAME }}</name>
-              <description>${{ env.APP_NAME }}</description>
-              <author email="build@example.com" href="${{ env.WEB_URL }}">Build</author>
-              <content src="${{ env.WEB_URL }}" />
-              <access origin="*" />
-              <allow-intent href="http://*/*" />
-              <allow-intent href="https://*/*" />
-              <preference name="Orientation" value="default" />
-              <preference name="android-minSdkVersion" value="21" />
-              <preference name="android-targetSdkVersion" value="33" />
-          </widget>
-          EOF
-          
-          # Setup www
-          mkdir -p www
-          cat > www/index.html << 'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-              <title>App</title>
-              <style>
-                  * { margin:0; padding:0; }
-                  body { overflow:hidden; background:#000; }
-                  iframe { 
-                      width:100vw; 
-                      height:100vh; 
-                      border:none; 
-                      position:fixed;
-                      top:0;
-                      left:0;
-                  }
-                  .loading {
-                      position:fixed;
-                      top:50%;
-                      left:50%;
-                      transform:translate(-50%,-50%);
-                      color:#fff;
-                      font-size:16px;
-                      z-index:999;
-                      font-family:Arial;
-                  }
-              </style>
-          </head>
-          <body>
-              <div class="loading">Loading...</div>
-              <iframe src="${{ env.WEB_URL }}" id="webview"></iframe>
-              <script>
-                  document.getElementById('webview').onload = function() {
-                      document.querySelector('.loading').style.display = 'none';
-                  };
-              </script>
-          </body>
-          </html>
-          EOF
-          
-          echo "✅ Project created"
-
-      - name: Download icon
-        if: env.ICON_URL != ''
-        run: |
-          cd app
-          
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
-          
-          mkdir -p res/icon/android
-          
-          echo "📥 Downloading icon..."
-          curl -L "${{ env.ICON_URL }}" -o icon.png
-          
-          if [[ -f icon.png ]]; then
-            for size in 192 144 96 72 48 36; do
-              convert icon.png -resize ${size}x${size} res/icon/android/icon-${size}.png 2>/dev/null || true
-            done
-            echo "✅ Icon set"
-          fi
-
-      - name: Build APK
-        run: |
-          cd app
-          
-          # Build langsung
-          echo "🔨 Building APK..."
-          cordova build android
-          
-          # Cari APK
-          echo "📦 Looking for APK..."
-          find . -name "*.apk" -exec ls -lh {} \;
-
+          docker run --rm \
+            -v $(pwd):/app \
+            -e WEB_URL="${{ github.event.inputs.web_url }}" \
+            -e APP_NAME="${{ github.event.inputs.app_name }}" \
+            beevelop/cordova bash -c "
+              cd /app
+              cordova create app com.example.app \"\$APP_NAME\"
+              cd app
+              cordova platform add android
+              sed -i 's|<content src="index.html" />|<content src=\"\$WEB_URL\" />|' config.xml
+              cordova build android
+            "
+      
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-apk
-          path: |
-            app/platforms/android/app/build/outputs/apk/debug/*.apk
-            app/platforms/android/app/build/outputs/apk/release/*.apk
-          retention-days: 30
-
-      - name: Create Release
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.APP_NAME }}-${{ github.run_number }}
-          name: "${{ env.APP_NAME }} v${{ env.VERSION }}"
-          files: |
-            app/platforms/android/app/build/outputs/apk/debug/*.apk
-            app/platforms/android/app/build/outputs/apk/release/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Debug
-        if: failure()
-        run: |
-          echo "❌ Build failed!"
-          echo "📁 Directory:"
-          ls -la app/platforms/android/ 2>/dev/null || echo "No android dir"
-          echo ""
-          echo "📋 Error log:"
-          cat app/platforms/android/cordova/build.log 2>/dev/null || echo "No log"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -rf app
-          echo "✅ Cleanup done"
+          name: app
+          path: app/platforms/android/app/build/outputs/apk/**/*.apk
