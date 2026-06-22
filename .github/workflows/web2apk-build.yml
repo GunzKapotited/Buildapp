@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '16'  # ← Pakai Node 16 (kompatibel dengan PWABuilder)
+          node-version: '18'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -42,15 +42,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install PWA2APK dari NPM (bukan PWABuilder)
-          npm install -g pwa2apk
+          # Install Bubblewrap (PWA to APK)
+          npm install -g @bubblewrap/cli
           
           # Install ImageMagick
           sudo apt-get update
           sudo apt-get install -y imagemagick wget unzip jq
           
           # Verify
-          pwa2apk --version || echo "pwa2apk installed"
+          bubblewrap --version || echo "Bubblewrap installed"
 
       - name: Download and prepare icon
         run: |
@@ -58,12 +58,9 @@ jobs:
           
           ICON_URL="${{ inputs.icon_url }}"
           
-          # ============================================
-          # FUNCTION: Get actual icon URL from release
-          # ============================================
+          # Function to get icon from release
           get_icon_from_release() {
             local url="$1"
-            
             local TAG=$(echo "$url" | sed 's/.*\/tag\///' | sed 's/?.*//')
             echo "📌 Extracted tag: $TAG"
             
@@ -78,153 +75,75 @@ jobs:
               echo "$ICON_URL"
               return 0
             fi
-            
-            local ANY_ASSET=$(echo "$RELEASE_INFO" | jq -r '.assets[0].browser_download_url' 2>/dev/null)
-            if [ -n "$ANY_ASSET" ] && [ "$ANY_ASSET" != "null" ]; then
-              echo "$ANY_ASSET"
-              return 0
-            fi
-            
             return 1
           }
           
-          # ============================================
-          # Check if URL is a release tag URL
-          # ============================================
+          # Check if URL is release tag
           if echo "$ICON_URL" | grep -q "/releases/tag/"; then
             echo "🔄 Detected release URL, extracting actual file URL..."
-            
             ACTUAL_URL=$(get_icon_from_release "$ICON_URL")
-            
             if [ -n "$ACTUAL_URL" ] && [ "$ACTUAL_URL" != "null" ]; then
               ICON_URL="$ACTUAL_URL"
               echo "✅ Found asset URL: $ICON_URL"
-            else
-              echo "❌ No asset found in release"
-              echo "🔄 Creating default icon..."
-              
-              convert -size 512x512 xc:transparent \
-                -fill black -gravity center \
-                -font Helvetica -pointsize 80 \
-                -annotate +0+0 "${{ inputs.app_name }}" \
-                icon.png || {
-                  echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
-                }
-              
-              echo "✅ Default icon created"
-              ls -la icon.png
-              exit 0
             fi
           fi
           
-          # ============================================
-          # Download the icon
-          # ============================================
+          # Download icon
           echo "⬇️ Downloading from: $ICON_URL"
-          
-          for i in 1 2 3; do
-            echo "Attempt $i..."
-            if curl -L -o icon.png "$ICON_URL" --fail --connect-timeout 10; then
-              echo "✅ Download successful"
-              break
-            else
-              echo "⚠️ Download attempt $i failed"
-              if [ $i -eq 3 ]; then
-                echo "❌ All download attempts failed"
-                echo "🔄 Creating default icon..."
-                convert -size 512x512 xc:transparent \
-                  -fill black -gravity center \
-                  -font Helvetica -pointsize 80 \
-                  -annotate +0+0 "${{ inputs.app_name }}" \
-                  icon.png || {
-                    echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
-                  }
-                echo "✅ Default icon created"
-              fi
-              sleep 2
-            fi
-          done
-          
-          # ============================================
-          # Validate icon
-          # ============================================
-          if [ ! -f "icon.png" ]; then
-            echo "❌ No icon file, creating default..."
-            convert -size 512x512 xc:transparent \
-              -fill black -gravity center \
-              -font Helvetica -pointsize 80 \
-              -annotate +0+0 "${{ inputs.app_name }}" \
+          curl -L -o icon.png "$ICON_URL" --fail --connect-timeout 10 || {
+            echo "⚠️ Download failed, creating default icon..."
+            convert -size 512x512 xc:black -fill white -gravity center \
+              -font Helvetica -pointsize 80 -annotate +0+0 "${{ inputs.app_name }}" \
               icon.png
-          fi
+          }
           
-          if ! file icon.png | grep -q "PNG image\|JPEG image"; then
-            echo "⚠️ File is not a valid image, creating default..."
-            convert -size 512x512 xc:transparent \
-              -fill black -gravity center \
-              -font Helvetica -pointsize 80 \
-              -annotate +0+0 "${{ inputs.app_name }}" \
+          # Validate and resize
+          if [ ! -f "icon.png" ] || ! file icon.png | grep -q "PNG image\|JPEG image"; then
+            echo "⚠️ Invalid image, creating default..."
+            convert -size 512x512 xc:black -fill white -gravity center \
+              -font Helvetica -pointsize 80 -annotate +0+0 "${{ inputs.app_name }}" \
               icon.png
           fi
           
           # Resize to 512x512
           convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
           
-          echo "✅ Icon ready:"
+          echo "✅ Icon ready"
           file icon.png
-          ls -la icon.png
 
-      - name: Generate APK using PWA2APK
+      - name: Generate APK using Bubblewrap
         id: generate_apk
         run: |
           echo "🔨 Generating APK..."
           echo "📱 App Name: ${{ inputs.app_name }}"
           echo "🌐 Web URL: ${{ inputs.web_url }}"
           
-          # Create output directory
-          mkdir -p output
-          
-          # Use pwa2apk (not PWABuilder)
-          pwa2apk \
-            --name "${{ inputs.app_name }}" \
-            --url "${{ inputs.web_url }}" \
-            --icon icon.png \
-            --output ./output \
-            --package "com.app.${{ github.run_id }}" || {
-              echo "⚠️ pwa2apk failed, trying alternative..."
-              
-              # Alternative: Build with webview
-              echo "🔄 Building with simple webview..."
-              
-              # Create simple Android project
-              mkdir -p android/app/src/main
-              
-              # Create AndroidManifest.xml
-              cat > AndroidManifest.xml << EOF
-              <?xml version="1.0" encoding="utf-8"?>
-              <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-                  package="com.app.${{ github.run_id }}">
-                  <application
-                      android:allowBackup="true"
-                      android:icon="@mipmap/ic_launcher"
-                      android:label="${{ inputs.app_name }}"
-                      android:theme="@style/Theme.AppCompat.Light.NoActionBar">
-                      <activity android:name=".MainActivity"
-                          android:exported="true">
-                          <intent-filter>
-                              <action android:name="android.intent.action.MAIN" />
-                              <category android:name="android.intent.category.LAUNCHER" />
-                          </intent-filter>
-                      </activity>
-                  </application>
-              </manifest>
-              EOF
-              
-              # Install Android build tools
-              sudo apt-get install -y android-sdk
-              
-              echo "⚠️ Alternative build method requires more setup"
-              exit 1
+          # Create PWA manifest
+          cat > manifest.json << EOF
+          {
+            "name": "${{ inputs.app_name }}",
+            "short_name": "${{ inputs.app_name }}",
+            "start_url": "${{ inputs.web_url }}",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#000000",
+            "icons": [
+              {
+                "src": "icon.png",
+                "sizes": "512x512",
+                "type": "image/png"
+              }
+            ]
           }
+          EOF
+          
+          # Initialize Bubblewrap
+          echo "🔄 Initializing Bubblewrap..."
+          npx @bubblewrap/cli init --manifest manifest.json
+          
+          # Build APK
+          echo "🔄 Building APK..."
+          npx @bubblewrap/cli build
           
           # Find APK
           APK_FOUND=$(find . -name "*.apk" -type f | head -1)
@@ -237,7 +156,7 @@ jobs:
           else
             echo "❌ No APK found"
             echo "📂 Directory contents:"
-            find . -type f 2>/dev/null | head -20
+            find . -type f 2>/dev/null | head -30
             exit 1
           fi
 
