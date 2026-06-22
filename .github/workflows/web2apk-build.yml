@@ -261,9 +261,15 @@ jobs:
           sed -i "s|APP_NAME_PLACEHOLDER|${{ steps.vars.outputs.app_name }}|g" www/index.html
           sed -i "s|WEB_URL_PLACEHOLDER|${{ steps.vars.outputs.web_url }}|g" www/index.html
 
+      - name: Remove existing android folder if exists
+        run: |
+          if [ -d "android" ]; then
+            echo "Removing existing android folder..."
+            rm -rf android
+          fi
+
       - name: Initialize Capacitor
         run: |
-          mkdir -p android
           npx cap init \
             "${{ steps.vars.outputs.app_name }}" \
             "${{ steps.vars.outputs.package_name }}" \
