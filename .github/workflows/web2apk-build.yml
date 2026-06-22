@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (PNG/JPG)'
+        description: 'URL Icon (PNG/JPG) atau URL Release'
         required: true
         type: string
 
@@ -48,8 +48,44 @@ jobs:
 
       - name: Download icon
         run: |
-          curl -L -o icon.png "${{ inputs.icon_url }}" || echo "Download failed"
-          convert icon.png -resize 512x512 icon.png
+          ICON_URL="${{ inputs.icon_url }}"
+          
+          # KALAU URL RELEASE -> AMBIL ASSET NYA
+          if echo "$ICON_URL" | grep -q "/releases/tag/"; then
+            echo "🔍 Detected release URL, extracting icon..."
+            
+            TAG=$(echo "$ICON_URL" | sed 's/.*\/tag\///')
+            
+            # Ambil daftar assets dari release
+            ASSETS=$(curl -s \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
+            
+            # Cari file gambar (png/jpg/jpeg)
+            DOWNLOAD_URL=$(echo "$ASSETS" | jq -r '.assets[] | select(.name | test("\\.(png|jpg|jpeg)$"; "i")) | .browser_download_url' | head -1)
+            
+            if [ -n "$DOWNLOAD_URL" ] && [ "$DOWNLOAD_URL" != "null" ]; then
+              echo "✅ Found icon: $DOWNLOAD_URL"
+              curl -L -o icon.png "$DOWNLOAD_URL"
+            else
+              echo "❌ No image found in release, creating default..."
+              convert -size 512x512 xc:black -fill white -gravity center \
+                -font Helvetica -pointsize 60 -annotate +0+0 "${{ inputs.app_name }}" \
+                icon.png
+            fi
+          else
+            # LANGSUNG DOWNLOAD
+            curl -L -o icon.png "$ICON_URL" || {
+              echo "Download failed, creating default..."
+              convert -size 512x512 xc:black -fill white -gravity center \
+                -font Helvetica -pointsize 60 -annotate +0+0 "${{ inputs.app_name }}" \
+                icon.png
+            }
+          fi
+          
+          # Resize
+          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
 
       - name: Generate APK
         id: generate_apk
