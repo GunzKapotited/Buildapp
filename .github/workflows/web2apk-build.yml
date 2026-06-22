@@ -83,14 +83,8 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Build APK with Bubblewrap (Non-Interactive)
+      - name: Build APK with PWABuilder CLI
         run: |
-          # Set environment biar ga minta konfirmasi
-          export BUBBLEWRAP_YES=true
-          
-          # Install bubblewrap
-          npm install -g @bubblewrap/cli
-          
           # Create manifest
           cat > manifest.json << EOF
           {
@@ -110,11 +104,11 @@ jobs:
           }
           EOF
           
-          # Init dengan flag --yes
-          echo "Y" | bubblewrap init --manifest manifest.json || bubblewrap init --manifest manifest.json --yes
+          # Install PWABuilder CLI dari npm
+          npm install -g @pwabuilder/cli
           
           # Build
-          bubblewrap build --output ./output
+          pwabuilder build --manifest manifest.json --platform android --output ./output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
