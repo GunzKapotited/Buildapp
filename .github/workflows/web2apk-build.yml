@@ -55,14 +55,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
-      - name: Install dependencies
+      - name: Create package.json
         run: |
-          npm install -g pwa2apk
-          npm install -g cordova-res
-          npm install -g @capacitor/cli
-          npm install -g @capacitor/android
+          npm init -y
+          npm install -g pwa2apk cordova-res @capacitor/cli @capacitor/android
+
+      - name: Install dependencies locally
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Install Android SDK dependencies
         run: |
@@ -96,9 +97,8 @@ jobs:
       - name: Set environment variables
         id: vars
         run: |
-          # Extract domain from URL for network config
+          # Extract domain from URL
           WEB_URL="${{ github.event.inputs.web_url }}"
-          # Remove protocol
           DOMAIN=$(echo "$WEB_URL" | sed -E 's|^https?://||' | cut -d'/' -f1)
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
