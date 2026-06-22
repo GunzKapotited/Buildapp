@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '16'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -44,69 +44,16 @@ jobs:
         run: |
           npm install -g pwabuilder
           sudo apt-get update
-          sudo apt-get install -y imagemagick wget unzip jq
+          sudo apt-get install -y imagemagick
 
-      - name: Download and prepare icon
+      - name: Download icon
         run: |
-          echo "⬇️ Downloading icon from: ${{ inputs.icon_url }}"
-          
-          ICON_URL="${{ inputs.icon_url }}"
-          
-          get_icon_from_release() {
-            local url="$1"
-            local TAG=$(echo "$url" | sed 's/.*\/tag\///' | sed 's/?.*//')
-            echo "📌 Extracted tag: $TAG"
-            
-            local RELEASE_INFO=$(curl -s \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
-            
-            local ICON_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | test("icon|png|jpg|jpeg"; "i")) | .browser_download_url' | head -1)
-            
-            if [ -n "$ICON_URL" ] && [ "$ICON_URL" != "null" ]; then
-              echo "$ICON_URL"
-              return 0
-            fi
-            return 1
-          }
-          
-          if echo "$ICON_URL" | grep -q "/releases/tag/"; then
-            echo "🔄 Detected release URL, extracting actual file URL..."
-            ACTUAL_URL=$(get_icon_from_release "$ICON_URL")
-            if [ -n "$ACTUAL_URL" ] && [ "$ACTUAL_URL" != "null" ]; then
-              ICON_URL="$ACTUAL_URL"
-              echo "✅ Found asset URL: $ICON_URL"
-            fi
-          fi
-          
-          echo "⬇️ Downloading from: $ICON_URL"
-          curl -L -o icon.png "$ICON_URL" --fail --connect-timeout 10 || {
-            echo "⚠️ Download failed, creating default icon..."
-            convert -size 512x512 xc:black -fill white -gravity center \
-              -font Helvetica -pointsize 80 -annotate +0+0 "${{ inputs.app_name }}" \
-              icon.png
-          }
-          
-          if [ ! -f "icon.png" ] || ! file icon.png | grep -q "PNG image\|JPEG image"; then
-            echo "⚠️ Invalid image, creating default..."
-            convert -size 512x512 xc:black -fill white -gravity center \
-              -font Helvetica -pointsize 80 -annotate +0+0 "${{ inputs.app_name }}" \
-              icon.png
-          fi
-          
-          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
-          
-          echo "✅ Icon ready"
-          file icon.png
+          curl -L -o icon.png "${{ inputs.icon_url }}" || echo "Download failed"
+          convert icon.png -resize 512x512 icon.png
 
       - name: Generate APK
         id: generate_apk
         run: |
-          echo "🔨 Generating APK..."
-          echo "📱 App Name: ${{ inputs.app_name }}"
-          echo "🌐 Web URL: ${{ inputs.web_url }}"
-          
           cat > manifest.json << EOF
           {
             "name": "${{ inputs.app_name }}",
@@ -127,54 +74,12 @@ jobs:
           
           pwabuilder build --manifest manifest.json --platform android --output ./output
           
-          APK_PATH=$(find ./output -name "*.apk" -type f | head -1)
-          
-          if [ -n "$APK_PATH" ]; then
-            echo "✅ APK found: $APK_PATH"
-            echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          else
-            echo "❌ No APK found"
-            ls -la ./output/
-            exit 1
-          fi
+          APK_PATH=$(find ./output -name "*.apk" | head -1)
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
 
-      - name: Verify APK
-        run: |
-          APK_PATH="${{ steps.generate_apk.outputs.apk_path }}"
-          
-          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-            echo "❌ APK not found"
-            exit 1
-          fi
-          
-          APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || echo "0")
-          APK_SIZE_MB=$((APK_SIZE / 1048576))
-          
-          echo "✅ APK verified (${APK_SIZE_MB} MB)"
-
-      - name: Upload APK as artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: web2apk-${{ inputs.app_name }}
           path: ${{ steps.generate_apk.outputs.apk_path }}
-          if-no-files-found: error
           retention-days: 7
-
-      - name: Build summary
-        if: always()
-        run: |
-          echo "## Web to APK Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| App Name | ${{ inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Web URL | ${{ inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ APK generated successfully!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
-          fi
