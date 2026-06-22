@@ -42,15 +42,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install Bubblewrap (PWA to APK)
           npm install -g @bubblewrap/cli
-          
-          # Install ImageMagick
           sudo apt-get update
           sudo apt-get install -y imagemagick wget unzip jq
-          
-          # Verify
-          bubblewrap --version || echo "Bubblewrap installed"
 
       - name: Download and prepare icon
         run: |
@@ -58,7 +52,6 @@ jobs:
           
           ICON_URL="${{ inputs.icon_url }}"
           
-          # Function to get icon from release
           get_icon_from_release() {
             local url="$1"
             local TAG=$(echo "$url" | sed 's/.*\/tag\///' | sed 's/?.*//')
@@ -78,7 +71,6 @@ jobs:
             return 1
           }
           
-          # Check if URL is release tag
           if echo "$ICON_URL" | grep -q "/releases/tag/"; then
             echo "🔄 Detected release URL, extracting actual file URL..."
             ACTUAL_URL=$(get_icon_from_release "$ICON_URL")
@@ -88,7 +80,6 @@ jobs:
             fi
           fi
           
-          # Download icon
           echo "⬇️ Downloading from: $ICON_URL"
           curl -L -o icon.png "$ICON_URL" --fail --connect-timeout 10 || {
             echo "⚠️ Download failed, creating default icon..."
@@ -97,7 +88,6 @@ jobs:
               icon.png
           }
           
-          # Validate and resize
           if [ ! -f "icon.png" ] || ! file icon.png | grep -q "PNG image\|JPEG image"; then
             echo "⚠️ Invalid image, creating default..."
             convert -size 512x512 xc:black -fill white -gravity center \
@@ -105,7 +95,6 @@ jobs:
               icon.png
           fi
           
-          # Resize to 512x512
           convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
           
           echo "✅ Icon ready"
@@ -118,7 +107,6 @@ jobs:
           echo "📱 App Name: ${{ inputs.app_name }}"
           echo "🌐 Web URL: ${{ inputs.web_url }}"
           
-          # Create PWA manifest
           cat > manifest.json << EOF
           {
             "name": "${{ inputs.app_name }}",
@@ -137,26 +125,28 @@ jobs:
           }
           EOF
           
-          # Initialize Bubblewrap
+          # INIT dengan skip JDK prompt
           echo "🔄 Initializing Bubblewrap..."
-          npx @bubblewrap/cli init --manifest manifest.json
+          echo "Y" | npx @bubblewrap/cli init --manifest manifest.json || {
+            echo "⚠️ Init failed, trying with --skip..."
+            npx @bubblewrap/cli init --manifest manifest.json --skip
+          }
           
-          # Build APK
+          # BUILD
           echo "🔄 Building APK..."
           npx @bubblewrap/cli build
           
-          # Find APK
-          APK_FOUND=$(find . -name "*.apk" -type f | head -1)
-          
-          if [ -n "$APK_FOUND" ] && [ -f "$APK_FOUND" ]; then
-            echo "✅ APK found: $APK_FOUND"
+          # APK hasilnya di root: app-release.apk
+          if [ -f "app-release.apk" ]; then
+            echo "✅ APK found: app-release.apk"
             mkdir -p output
-            cp "$APK_FOUND" ./output/app-release.apk
+            cp app-release.apk ./output/app-release.apk
             echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
           else
             echo "❌ No APK found"
             echo "📂 Directory contents:"
-            find . -type f 2>/dev/null | head -30
+            ls -la
+            find . -name "*.apk" 2>/dev/null || echo "No APK files"
             exit 1
           fi
 
