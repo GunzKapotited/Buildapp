@@ -60,7 +60,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '11'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -315,7 +315,7 @@ jobs:
           </network-security-config>
           EOF
 
-      - name: Update build.gradle with Gradle 7.x
+      - name: Update build.gradle
         run: |
           cat > android/app/build.gradle << 'EOF'
           apply plugin: 'com.android.application'
@@ -354,27 +354,20 @@ jobs:
           }
           EOF
 
-      - name: Force rebuild with fresh Gradle
+      - name: Use Gradle 7.6.1
         run: |
           cd android
-          
-          # Hapus semua cache Gradle
-          rm -rf ~/.gradle/caches/
-          rm -rf .gradle
-          rm -rf build
-          rm -rf app/build
-          
-          # Beri permission
+          sed -i 's/gradle-8.2.1-all.zip/gradle-7.6.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.2.1-all.zip/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-7.6.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
+          cat gradle/wrapper/gradle-wrapper.properties
+          cd ..
+
+      - name: Build APK with Gradle
+        run: |
+          cd android
           chmod +x gradlew
-          chmod +x gradle/wrapper/gradle-wrapper.jar || true
-          
-          # Set environment
-          export GRADLE_USER_HOME=$HOME/.gradle
-          export JAVA_OPTS="-Xmx2048m"
-          
-          # Build dengan force
-          ./gradlew clean --no-daemon --refresh-dependencies
-          ./gradlew assembleRelease --no-daemon --refresh-dependencies --stacktrace
+          ./gradlew clean
+          ./gradlew assembleRelease --no-daemon
           cd ..
 
       - name: Find and rename APK
