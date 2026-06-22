@@ -29,7 +29,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'  # ← Ubah ke 20 (atau 22)
+          cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -42,10 +43,17 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # Install PWABuilder
           npm install -g pwabuilder
+          
+          # Install ImageMagick
           sudo apt-get update
           sudo apt-get install -y imagemagick wget unzip jq
+          
+          # Verify
           pwabuilder --version || echo "PWABuilder installed"
+          node --version
+          npm --version
 
       - name: Download and prepare icon
         run: |
@@ -57,73 +65,50 @@ jobs:
           if echo "$ICON_URL" | grep -q "/releases/tag/"; then
             echo "🔄 Detected release URL, getting actual icon..."
             
-            # Extract tag
             TAG=$(echo "$ICON_URL" | sed 's/.*\/tag\///')
             echo "📌 Tag: $TAG"
             
-            # Get release info via GitHub API
             RELEASE_INFO=$(curl -s \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
             
-            # Find icon asset
             ICON_ASSET_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | contains("icon") or endswith(".png") or endswith(".jpg")) | .url' | head -1)
             
             if [ -n "$ICON_ASSET_URL" ] && [ "$ICON_ASSET_URL" != "null" ]; then
               echo "✅ Found icon asset: $ICON_ASSET_URL"
-              ICON_URL="$ICON_ASSET_URL"
-              
-              # Download via API
               curl -L \
                 -H "Accept: application/octet-stream" \
                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                 -o icon.png \
                 "$ICON_ASSET_URL"
             else
-              echo "❌ No icon found in release"
-              # Use default icon
-              echo "🔄 Using default icon"
+              echo "❌ No icon found in release, using default"
               curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=${{ inputs.app_name }}"
             fi
           else
             # Direct download
-            wget -O icon.png "$ICON_URL"
+            curl -L -o icon.png "$ICON_URL"
           fi
           
           # Check if download successful
           if [ ! -f "icon.png" ]; then
             echo "❌ Failed to download icon, using default"
-            convert -size 512x512 xc:transparent -fill black -gravity center \
-              -font Helvetica -pointsize 100 -annotate 0 "${{ inputs.app_name }}" \
-              -fill white -draw "rectangle 0,0 512,512" \
-              icon.png || curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=App"
+            curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=${{ inputs.app_name }}"
           fi
           
           # Check if file is valid image
           echo "🔍 Checking if file is valid image..."
           if ! file icon.png | grep -q "PNG image\|JPEG image"; then
-            echo "❌ Downloaded file is not a valid image"
-            echo "📄 File type:"
-            file icon.png
-            echo "📄 First 100 bytes:"
-            head -c 100 icon.png
-            exit 1
+            echo "❌ Downloaded file is not a valid image, using default"
+            curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=${{ inputs.app_name }}"
           fi
           
-          echo "✅ Icon downloaded successfully"
+          echo "✅ Icon ready"
           
           # Create icons directory
           mkdir -p icons
-          
-          # Resize icon to multiple sizes
-          echo "🔄 Creating icons in multiple sizes..."
-          convert icon.png -resize 192x192 -background transparent -gravity center -extent 192x192 icons/icon-192.png
-          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icons/icon-512.png
           cp icon.png icons/icon.png
-          
-          echo "✅ Icons prepared:"
-          ls -la icons/
 
       - name: Generate APK using PWABuilder
         id: generate_apk
@@ -143,12 +128,7 @@ jobs:
             "theme_color": "#000000",
             "icons": [
               {
-                "src": "icons/icon-192.png",
-                "sizes": "192x192",
-                "type": "image/png"
-              },
-              {
-                "src": "icons/icon-512.png",
+                "src": "icons/icon.png",
                 "sizes": "512x512",
                 "type": "image/png"
               }
@@ -162,10 +142,24 @@ jobs:
             --platform android \
             --output ./output || {
               echo "⚠️ PWABuilder build failed, trying alternative..."
-              exit 1
+              
+              # Alternative: Install and use pwa2apk from GitHub
+              echo "🔄 Method 2: Using PWA2APK from GitHub..."
+              
+              git clone https://github.com/toly1994328/pwa2apk.git
+              cd pwa2apk
+              npm install
+              
+              node index.js \
+                --url "${{ inputs.web_url }}" \
+                --name "${{ inputs.app_name }}" \
+                --icon ../icon.png \
+                --output ../output
+              cd ..
           }
           
           # Find APK
+          echo "📂 Searching for APK..."
           APK_FOUND=$(find . -name "*.apk" -type f | head -1)
           
           if [ -n "$APK_FOUND" ] && [ -f "$APK_FOUND" ]; then
@@ -175,6 +169,8 @@ jobs:
             echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
           else
             echo "❌ No APK found"
+            echo "📂 Directory structure:"
+            find . -type f 2>/dev/null | head -20
             exit 1
           fi
 
