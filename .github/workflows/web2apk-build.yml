@@ -38,67 +38,61 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip imagemagick jq
+          sudo apt-get install -y wget unzip imagemagick jq curl
 
       - name: Download icon
         run: |
           ICON_URL="${{ inputs.icon_url }}"
           
-          echo "🔍 Processing URL: $ICON_URL"
+          echo "🔍 Processing icon URL: $ICON_URL"
           
-          # KALAU URL RELEASE -> AMBIL ASSET GAMBAR
+          # KALAU URL RELEASE -> AMBIL ASSET
           if echo "$ICON_URL" | grep -q "/releases/tag/"; then
-            echo "📌 Detected release URL, extracting image asset..."
+            echo "📌 Release URL detected, extracting image..."
             
             TAG=$(echo "$ICON_URL" | sed 's/.*\/tag\///' | sed 's/?.*//')
             echo "📌 Tag: $TAG"
             
-            # Ambil data release via API
             RELEASE_DATA=$(curl -s \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
             
-            # Cari asset gambar (png/jpg/jpeg)
             IMAGE_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name | test("\\.(png|jpg|jpeg|ico)$"; "i")) | .browser_download_url' | head -1)
             
             if [ -n "$IMAGE_URL" ] && [ "$IMAGE_URL" != "null" ]; then
-              echo "✅ Found image asset: $IMAGE_URL"
-              echo "⬇️ Downloading image..."
+              echo "✅ Found image: $IMAGE_URL"
               curl -L -o icon.png "$IMAGE_URL"
             else
-              echo "❌ No image found in release!"
-              echo "📋 Creating default icon..."
+              echo "❌ No image found, creating default..."
               convert -size 512x512 xc:black -fill white -gravity center \
                 -font Helvetica -pointsize 60 -annotate +0+0 "${{ inputs.app_name }}" \
                 icon.png
             fi
           else
-            # LANGSUNG DOWNLOAD
-            echo "⬇️ Downloading from URL..."
             curl -L -o icon.png "$ICON_URL"
           fi
           
-          # KALAU GAGAL/GAMBAR GA VALID -> BUAT DEFAULT
+          # VALIDASI
           if [ ! -f "icon.png" ] || ! file icon.png | grep -q "PNG image\|JPEG image"; then
-            echo "⚠️ Invalid image, creating default icon..."
+            echo "⚠️ Invalid image, creating default..."
             convert -size 512x512 xc:black -fill white -gravity center \
               -font Helvetica -pointsize 60 -annotate +0+0 "${{ inputs.app_name }}" \
               icon.png
           fi
           
-          # RESIZE
           convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
           
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Build APK with PWA CLI
+      - name: Build APK with PWABuilder CLI
         run: |
-          # Download PWA Builder CLI
+          # Download PWABuilder CLI
           wget -O pwabuilder https://github.com/pwa-builder/pwabuilder-cli/releases/latest/download/pwabuilder-cli-linux
           chmod +x pwabuilder
           
+          # Create manifest
           cat > manifest.json << EOF
           {
             "name": "${{ inputs.app_name }}",
@@ -117,7 +111,8 @@ jobs:
           }
           EOF
           
-          ./pwabuilder build --manifest manifest.json --platform android --output ./output
+          # BUILD - pake manifestPath
+          ./pwabuilder build --manifestPath manifest.json --platform android --output ./output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
