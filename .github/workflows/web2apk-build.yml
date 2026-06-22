@@ -125,16 +125,19 @@ jobs:
           }
           EOF
           
-          # INIT dengan skip JDK prompt
+          # INIT - pake yes untuk auto answer
           echo "🔄 Initializing Bubblewrap..."
-          echo "Y" | npx @bubblewrap/cli init --manifest manifest.json || {
+          yes | npx @bubblewrap/cli init --manifest manifest.json || {
             echo "⚠️ Init failed, trying with --skip..."
             npx @bubblewrap/cli init --manifest manifest.json --skip
           }
           
           # BUILD
           echo "🔄 Building APK..."
-          npx @bubblewrap/cli build
+          npx @bubblewrap/cli build || {
+            echo "⚠️ Build failed, trying with --skip..."
+            npx @bubblewrap/cli build --skip
+          }
           
           # APK hasilnya di root: app-release.apk
           if [ -f "app-release.apk" ]; then
