@@ -4,140 +4,71 @@ on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'Website URL (contoh: https://example.com)'
+        description: "URL Website"
         required: true
         type: string
+
       app_name:
-        description: 'Nama Aplikasi'
+        description: "Nama APK"
         required: true
         type: string
-        default: 'MyApp'
-      package_name:
-        description: 'Package Name (contoh: com.myapp.web)'
+
+      icon_url:
+        description: "URL Icon APK"
         required: false
         type: string
-        default: 'com.myapp.web'
+
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-      
+    timeout-minutes: 60
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        
-      - name: Setup Node.js
+
+
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        
-      - name: Clean Gradle Cache
+          node-version: 20
+
+
+      - name: Install Tools
         run: |
-          rm -rf ~/.gradle/caches/
-          
-      - name: Install Capacitor
+          sudo apt update
+          sudo apt install -y zip unzip wget
+
+
+      - name: Download Android Template
         run: |
-          npm install -g @capacitor/cli
-          
-      - name: Create Web App
+          git clone https://github.com/GunzKapotited/android-templete.git android-template || true
+
+
+      - name: Prepare Project
         run: |
-          mkdir -p webapp/www
-          cd webapp
-          
-          # Create index.html
-          cat > www/index.html << 'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <title>${{ github.event.inputs.app_name }}</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body, html { width: 100%; height: 100%; overflow: hidden; }
-              iframe { width: 100%; height: 100%; border: none; }
-            </style>
-          </head>
-          <body>
-            <iframe src="${{ github.event.inputs.web_url }}" allow="geolocation; microphone; camera; payment; autoplay"></iframe>
-          </body>
-          </html>
-          EOF
-          
-          # Create capacitor config
-          cat > capacitor.config.json << EOF
-          {
-            "appId": "${{ github.event.inputs.package_name }}",
-            "appName": "${{ github.event.inputs.app_name }}",
-            "webDir": "www"
-          }
-          EOF
-          
-          # Init Capacitor
-          npm init -y
-          npm install @capacitor/android @capacitor/core
-          npx cap init "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.package_name }}"
-          npx cap add android
-          
-      - name: Build Android APK
+          cd android-template
+
+          sed -i "s|APP_NAME_HERE|${{ inputs.app_name }}|g" ./* 2>/dev/null || true
+          sed -i "s|WEB_URL_HERE|${{ inputs.web_url }}|g" ./* 2>/dev/null || true
+
+          if [ ! -z "${{ inputs.icon_url }}" ]; then
+            wget "${{ inputs.icon_url }}" -O app_icon.png || true
+          fi
+
+
+      - name: Build APK
         run: |
-          cd webapp
-          
-          # Sync
-          npx cap sync android
-          
-          # Build with gradle - FIXED dengan clean build
-          cd android
+          cd android-template
+
           chmod +x gradlew
-          ./gradlew clean
-          ./gradlew assembleDebug --no-daemon
-          cd ../..
-          
-          # Copy APK
-          mkdir -p output
-          cp webapp/android/app/build/outputs/apk/debug/app-debug.apk output/app.apk 2>/dev/null || echo "APK not found"
-          
-      - name: Upload APK Artifact
+
+          ./gradlew assembleRelease
+
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.app_name }}-APK
-          path: output/app.apk
-          if-no-files-found: warn
-          
-      - name: Create Release
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: web2apk-${{ github.run_number }}
-          name: "${{ github.event.inputs.app_name }} - Web2APK"
-          files: output/app.apk
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Success Message
-        if: success()
-        run: |
-          echo "✅ APK BERHASIL DIBUAT!"
-          echo "📱 Nama: ${{ github.event.inputs.app_name }}"
-          echo "🌐 URL: ${{ github.event.inputs.web_url }}"
-          echo "📦 Package: ${{ github.event.inputs.package_name }}"
-          
-      - name: Failure Message
-        if: failure()
-        run: |
-          echo "❌ Build GAGAL!"
-          echo "Coba lagi atau cek log untuk detail"
+          name: ${{ inputs.app_name }}-apk
+          path: android-template/app/build/outputs/apk/release/*.apk
