@@ -38,7 +38,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip imagemagick jq curl
+          sudo apt-get install -y wget unzip imagemagick jq curl nodejs npm
+          npm install -g @pwabuilder/pwabuilder
 
       - name: Download icon
         run: |
@@ -46,7 +47,6 @@ jobs:
           
           echo "🔍 Processing icon URL: $ICON_URL"
           
-          # KALAU URL RELEASE -> AMBIL ASSET
           if echo "$ICON_URL" | grep -q "/releases/tag/"; then
             echo "📌 Release URL detected, extracting image..."
             
@@ -73,7 +73,6 @@ jobs:
             curl -L -o icon.png "$ICON_URL"
           fi
           
-          # VALIDASI
           if [ ! -f "icon.png" ] || ! file icon.png | grep -q "PNG image\|JPEG image"; then
             echo "⚠️ Invalid image, creating default..."
             convert -size 512x512 xc:black -fill white -gravity center \
@@ -86,12 +85,8 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Build APK with PWABuilder CLI
+      - name: Build APK with PWA Builder
         run: |
-          # Download PWABuilder CLI - PERBAIKI URL
-          wget -O pwabuilder https://github.com/pwa-builder/pwabuilder-cli/releases/download/v2.0.3/pwabuilder-cli-linux-x64
-          chmod +x pwabuilder
-          
           # Create manifest
           cat > manifest.json << EOF
           {
@@ -111,8 +106,8 @@ jobs:
           }
           EOF
           
-          # BUILD
-          ./pwabuilder build --manifestPath manifest.json --platform android --output ./output
+          # Build with npx
+          npx @pwabuilder/cli build --manifest manifest.json --platform android --out ./output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
