@@ -72,7 +72,8 @@ jobs:
             android-sdk \
             gradle \
             wget \
-            unzip
+            unzip \
+            imagemagick
 
       - name: Setup Android SDK
         run: |
@@ -92,20 +93,35 @@ jobs:
             "platform-tools" \
             "tools" || true
 
+      - name: Set environment variables
+        id: vars
+        run: |
+          # Extract domain from URL for network config
+          WEB_URL="${{ github.event.inputs.web_url }}"
+          # Remove protocol
+          DOMAIN=$(echo "$WEB_URL" | sed -E 's|^https?://||' | cut -d'/' -f1)
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
+          echo "app_name=${{ github.event.inputs.app_name }}" >> $GITHUB_OUTPUT
+          echo "package_name=${{ github.event.inputs.package_name }}" >> $GITHUB_OUTPUT
+          echo "icon_url=${{ github.event.inputs.icon_url }}" >> $GITHUB_OUTPUT
+          echo "orientation=${{ github.event.inputs.orientation }}" >> $GITHUB_OUTPUT
+          echo "display_mode=${{ github.event.inputs.display_mode }}" >> $GITHUB_OUTPUT
+
       - name: Create PWA2APK config
         run: |
           cat > pwa2apk-config.json << EOF
           {
-            "name": "${{ github.event.inputs.app_name }}",
-            "short_name": "${{ github.event.inputs.app_name }}",
-            "start_url": "${{ github.event.inputs.web_url }}",
-            "display": "${{ github.event.inputs.display_mode }}",
-            "orientation": "${{ github.event.inputs.orientation }}",
+            "name": "${{ steps.vars.outputs.app_name }}",
+            "short_name": "${{ steps.vars.outputs.app_name }}",
+            "start_url": "${{ steps.vars.outputs.web_url }}",
+            "display": "${{ steps.vars.outputs.display_mode }}",
+            "orientation": "${{ steps.vars.outputs.orientation }}",
             "background_color": "#ffffff",
             "theme_color": "#1976d2",
             "icons": [
               {
-                "src": "${{ github.event.inputs.icon_url }}",
+                "src": "${{ steps.vars.outputs.icon_url }}",
                 "sizes": "512x512",
                 "type": "image/png",
                 "purpose": "any maskable"
@@ -120,11 +136,11 @@ jobs:
         run: |
           cat > capacitor.config.json << EOF
           {
-            "appId": "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}",
-            "appName": "${{ github.event.inputs.app_name }}",
+            "appId": "${{ steps.vars.outputs.package_name }}",
+            "appName": "${{ steps.vars.outputs.app_name }}",
             "webDir": "www",
             "server": {
-              "url": "${{ github.event.inputs.web_url }}",
+              "url": "${{ steps.vars.outputs.web_url }}",
               "cleartext": true,
               "androidScheme": "https"
             },
@@ -158,28 +174,29 @@ jobs:
       - name: Download icon
         run: |
           mkdir -p www
-          if [ -n "${{ github.event.inputs.icon_url }}" ]; then
-            wget -O www/icon.png "${{ github.event.inputs.icon_url }}" || echo "Icon download failed, using default"
+          if [ -n "${{ steps.vars.outputs.icon_url }}" ] && [ "${{ steps.vars.outputs.icon_url }}" != "null" ]; then
+            wget -O www/icon.png "${{ steps.vars.outputs.icon_url }}" || echo "Icon download failed, using default"
           fi
           
           # Create default icon if download failed
           if [ ! -f www/icon.png ]; then
             echo "Creating default icon..."
-            convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
-              -gravity center -annotate 0 "${{ github.event.inputs.app_name }}" www/icon.png || true
+            if command -v convert &> /dev/null; then
+              convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
+                -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/icon.png || true
+            fi
           fi
 
       - name: Create splash screen
         run: |
-          # Create a simple splash screen
           if command -v convert &> /dev/null; then
             convert -size 1080x1920 xc:#1976d2 -font DejaVu-Sans -pointsize 60 -fill white \
-              -gravity center -annotate 0 "${{ github.event.inputs.app_name }}" www/splash.png || true
+              -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/splash.png || true
           fi
 
       - name: Create index.html for webview
         run: |
-          cat > www/index.html << EOF
+          cat > www/index.html << 'EOF'
           <!DOCTYPE html>
           <html>
           <head>
@@ -190,7 +207,7 @@ jobs:
             <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
             <link rel="manifest" href="manifest.json">
             <link rel="icon" href="icon.png">
-            <title>${{ github.event.inputs.app_name }}</title>
+            <title>APP_NAME_PLACEHOLDER</title>
             <style>
               * { margin: 0; padding: 0; box-sizing: border-box; }
               body { 
@@ -245,11 +262,11 @@ jobs:
           <body>
             <div id="loading">
               <div class="spinner"></div>
-              <div class="app-name">${{ github.event.inputs.app_name }}</div>
+              <div class="app-name">APP_NAME_PLACEHOLDER</div>
             </div>
             <iframe 
               id="webview"
-              src="${{ github.event.inputs.web_url }}"
+              src="WEB_URL_PLACEHOLDER"
               allow="camera; microphone; geolocation; payment; clipboard-read; clipboard-write"
               allowfullscreen>
             </iframe>
@@ -257,19 +274,16 @@ jobs:
               const loading = document.getElementById('loading');
               const iframe = document.getElementById('webview');
               
-              // Hide loading when iframe loads
               iframe.addEventListener('load', () => {
                 setTimeout(() => {
                   loading.classList.add('hidden');
                 }, 500);
               });
               
-              // Timeout fallback
               setTimeout(() => {
                 loading.classList.add('hidden');
               }, 10000);
               
-              // Handle offline status
               iframe.addEventListener('error', () => {
                 loading.innerHTML = \`
                   <div style="text-align:center;padding:20px;">
@@ -293,16 +307,20 @@ jobs:
           </body>
           </html>
           EOF
+          
+          # Replace placeholders
+          sed -i "s|APP_NAME_PLACEHOLDER|${{ steps.vars.outputs.app_name }}|g" www/index.html
+          sed -i "s|WEB_URL_PLACEHOLDER|${{ steps.vars.outputs.web_url }}|g" www/index.html
 
       - name: Create manifest.json
         run: |
           cat > www/manifest.json << EOF
           {
-            "name": "${{ github.event.inputs.app_name }}",
-            "short_name": "${{ github.event.inputs.app_name }}",
-            "start_url": "${{ github.event.inputs.web_url }}",
-            "display": "${{ github.event.inputs.display_mode }}",
-            "orientation": "${{ github.event.inputs.orientation }}",
+            "name": "${{ steps.vars.outputs.app_name }}",
+            "short_name": "${{ steps.vars.outputs.app_name }}",
+            "start_url": "${{ steps.vars.outputs.web_url }}",
+            "display": "${{ steps.vars.outputs.display_mode }}",
+            "orientation": "${{ steps.vars.outputs.orientation }}",
             "background_color": "#ffffff",
             "theme_color": "#1976d2",
             "icons": [
@@ -314,7 +332,7 @@ jobs:
               }
             ],
             "scope": "/",
-            "description": "${{ github.event.inputs.app_name }} Web App"
+            "description": "${{ steps.vars.outputs.app_name }} Web App"
           }
           EOF
 
@@ -322,21 +340,21 @@ jobs:
         run: |
           mkdir -p android
           npx cap init \
-            "${{ github.event.inputs.app_name }}" \
-            "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}" \
+            "${{ steps.vars.outputs.app_name }}" \
+            "${{ steps.vars.outputs.package_name }}" \
             --web-dir=www
           
           npx cap add android
           
-          # Update Android config
+          # Update Android manifest
           cat > android/app/src/main/AndroidManifest.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="${{ github.event.inputs.package_name || 'com.webapp.myapp' }}">
+              package="${{ steps.vars.outputs.package_name }}">
             <application
                 android:allowBackup="true"
                 android:icon="@mipmap/ic_launcher"
-                android:label="${{ github.event.inputs.app_name }}"
+                android:label="${{ steps.vars.outputs.app_name }}"
                 android:roundIcon="@mipmap/ic_launcher_round"
                 android:supportsRtl="true"
                 android:theme="@style/AppTheme"
@@ -345,7 +363,7 @@ jobs:
               <activity
                   android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
                   android:name=".MainActivity"
-                  android:label="${{ github.event.inputs.app_name }}"
+                  android:label="${{ steps.vars.outputs.app_name }}"
                   android:theme="@style/AppTheme.NoActionBarLaunch"
                   android:launchMode="singleTask"
                   android:exported="true">
@@ -376,7 +394,7 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <network-security-config>
             <domain-config cleartextTrafficPermitted="true">
-              <domain includeSubdomains="true">${{ github.event.inputs.web_url | replace('https://', '') | replace('http://', '') | split('/') | first }}</domain>
+              <domain includeSubdomains="true">${{ steps.vars.outputs.domain }}</domain>
             </domain-config>
             <base-config cleartextTrafficPermitted="true" />
           </network-security-config>
@@ -384,15 +402,14 @@ jobs:
 
       - name: Update build.gradle
         run: |
-          # Update app build.gradle
           cat > android/app/build.gradle << 'EOF'
           apply plugin: 'com.android.application'
           
           android {
-            namespace "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}"
+            namespace "${{ steps.vars.outputs.package_name }}"
             compileSdk 33
             defaultConfig {
-              applicationId "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}"
+              applicationId "${{ steps.vars.outputs.package_name }}"
               minSdk 21
               targetSdk 33
               versionCode 1
@@ -432,13 +449,13 @@ jobs:
 
       - name: Find and rename APK
         run: |
-          # Find the APK
           APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -n 1)
           if [ -n "$APK_PATH" ]; then
             echo "Found APK at: $APK_PATH"
             mkdir -p output
-            cp "$APK_PATH" "output/${{ github.event.inputs.app_name }}.apk"
-            echo "APK copied to output/${{ github.event.inputs.app_name }}.apk"
+            cp "$APK_PATH" "output/${{ steps.vars.outputs.app_name }}.apk"
+            echo "APK copied to output/${{ steps.vars.outputs.app_name }}.apk"
+            echo "apk_path=output/${{ steps.vars.outputs.app_name }}.apk" >> $GITHUB_OUTPUT
           else
             echo "No APK found!"
             find android/app/build/outputs -type f -name "*.apk" || echo "No APK files found"
@@ -448,45 +465,45 @@ jobs:
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-${{ github.event.inputs.app_name }}
+          name: web2apk-${{ steps.vars.outputs.app_name }}
           path: output/*.apk
           retention-days: 30
 
       - name: Create release and upload APK
-        if: github.event.inputs.create_release != 'false'
+        if: always()
         run: |
-          TAG="web2apk-$(date +'%Y%m%d-%H%M%S')"
-          
-          # Create release
-          RESPONSE=$(curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/releases" \
-            -d "{
-              \"tag_name\": \"$TAG\",
-              \"name\": \"${{ github.event.inputs.app_name }} - Web2APK $TAG\",
-              \"draft\": false,
-              \"prerelease\": false
-            }")
-          
-          RELEASE_ID=$(echo $RESPONSE | jq -r '.id')
-          UPLOAD_URL=$(echo $RESPONSE | jq -r '.upload_url' | sed 's/{?name,label}//')
-          
-          echo "Release ID: $RELEASE_ID"
-          echo "Upload URL: $UPLOAD_URL"
-          
-          # Upload APK
-          if [ -f "output/${{ github.event.inputs.app_name }}.apk" ]; then
+          if [ -f "output/${{ steps.vars.outputs.app_name }}.apk" ]; then
+            TAG="web2apk-$(date +'%Y%m%d-%H%M%S')"
+            
+            RESPONSE=$(curl -L \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" \
+              -d "{
+                \"tag_name\": \"$TAG\",
+                \"name\": \"${{ steps.vars.outputs.app_name }} - Web2APK $TAG\",
+                \"draft\": false,
+                \"prerelease\": false
+              }")
+            
+            RELEASE_ID=$(echo $RESPONSE | jq -r '.id')
+            UPLOAD_URL=$(echo $RESPONSE | jq -r '.upload_url' | sed 's/{?name,label}//')
+            
+            echo "Release ID: $RELEASE_ID"
+            echo "Upload URL: $UPLOAD_URL"
+            
             curl -L \
               -X POST \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               -H "Content-Type: application/vnd.android.package-archive" \
-              "$UPLOAD_URL?name=${{ github.event.inputs.app_name }}.apk" \
-              --data-binary "@output/${{ github.event.inputs.app_name }}.apk"
+              "$UPLOAD_URL?name=${{ steps.vars.outputs.app_name }}.apk" \
+              --data-binary "@output/${{ steps.vars.outputs.app_name }}.apk"
+          else
+            echo "No APK to upload to release"
           fi
 
       - name: Display download info
@@ -494,7 +511,7 @@ jobs:
         run: |
           echo "=========================================="
           echo "📱 Web2APK Build Complete!"
-          echo "📦 APK: ${{ github.event.inputs.app_name }}.apk"
+          echo "📦 APK: ${{ steps.vars.outputs.app_name }}.apk"
           echo "=========================================="
           echo ""
           echo "📥 Download APK from artifacts or release"
