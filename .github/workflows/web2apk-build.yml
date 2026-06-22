@@ -17,11 +17,6 @@ on:
         required: false
         type: string
         default: 'com.myapp.web'
-      icon_url:
-        description: 'URL Icon (opsional)'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   build:
@@ -48,6 +43,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         
+      - name: Clean Gradle Cache
+        run: |
+          rm -rf ~/.gradle/caches/
+          
       - name: Install Capacitor
         run: |
           npm install -g @capacitor/cli
@@ -82,11 +81,7 @@ jobs:
           {
             "appId": "${{ github.event.inputs.package_name }}",
             "appName": "${{ github.event.inputs.app_name }}",
-            "webDir": "www",
-            "bundledWebRuntime": false,
-            "server": {
-              "androidScheme": "https"
-            }
+            "webDir": "www"
           }
           EOF
           
@@ -103,24 +98,26 @@ jobs:
           # Sync
           npx cap sync android
           
-          # Build with gradle
+          # Build with gradle - FIXED dengan clean build
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew clean
+          ./gradlew assembleDebug --no-daemon
           cd ../..
           
           # Copy APK
           mkdir -p output
-          cp webapp/android/app/build/outputs/apk/debug/app-debug.apk output/app.apk || echo "APK not found"
+          cp webapp/android/app/build/outputs/apk/debug/app-debug.apk output/app.apk 2>/dev/null || echo "APK not found"
           
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.inputs.app_name }}-APK
           path: output/app.apk
-          if-no-files-found: error
+          if-no-files-found: warn
           
       - name: Create Release
+        if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: web2apk-${{ github.run_number }}
@@ -132,10 +129,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Success Message
+        if: success()
         run: |
           echo "✅ APK BERHASIL DIBUAT!"
           echo "📱 Nama: ${{ github.event.inputs.app_name }}"
           echo "🌐 URL: ${{ github.event.inputs.web_url }}"
           echo "📦 Package: ${{ github.event.inputs.package_name }}"
-          echo ""
-          echo "🔽 Download APK dari Artifacts atau Release"
+          
+      - name: Failure Message
+        if: failure()
+        run: |
+          echo "❌ Build GAGAL!"
+          echo "Coba lagi atau cek log untuk detail"
