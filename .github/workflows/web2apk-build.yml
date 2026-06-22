@@ -38,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip imagemagick jq curl git
+          sudo apt-get install -y wget unzip imagemagick jq curl
 
       - name: Download icon
         run: |
@@ -84,23 +84,37 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Build APK with PWA2APK
+      - name: Build APK with Bubblewrap
         run: |
-          # Clone PWA2APK
-          git clone https://github.com/tomchen/pwa2apk.git
-          cd pwa2apk
+          # Download Bubblewrap
+          wget -O bubblewrap.jar https://github.com/GoogleChromeLabs/bubblewrap/releases/latest/download/bubblewrap.jar
           
-          # Copy manifest and icon
-          cp ../manifest.json .
-          cp ../icon.png .
+          # Create manifest
+          cat > manifest.json << EOF
+          {
+            "name": "${{ inputs.app_name }}",
+            "short_name": "${{ inputs.app_name }}",
+            "start_url": "${{ inputs.web_url }}",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#000000",
+            "icons": [
+              {
+                "src": "icon.png",
+                "sizes": "512x512",
+                "type": "image/png"
+              }
+            ]
+          }
+          EOF
           
-          # Build
-          chmod +x pwa2apk.sh
-          ./pwa2apk.sh --name "${{ inputs.app_name }}" --url "${{ inputs.web_url }}" --icon icon.png
+          # Build with bubblewrap
+          java -jar bubblewrap.jar init --manifest manifest.json
+          java -jar bubblewrap.jar build --output ./output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: web2apk-${{ inputs.app_name }}
-          path: ./pwa2apk/*.apk
+          path: ./output/*.apk
           retention-days: 7
