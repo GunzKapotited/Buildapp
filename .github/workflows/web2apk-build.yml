@@ -315,7 +315,7 @@ jobs:
           </network-security-config>
           EOF
 
-      - name: Update build.gradle
+      - name: Update build.gradle with Gradle 7.x
         run: |
           cat > android/app/build.gradle << 'EOF'
           apply plugin: 'com.android.application'
@@ -354,19 +354,27 @@ jobs:
           }
           EOF
 
-      - name: Fix Gradle permissions and build
+      - name: Force rebuild with fresh Gradle
         run: |
           cd android
+          
+          # Hapus semua cache Gradle
+          rm -rf ~/.gradle/caches/
+          rm -rf .gradle
+          rm -rf build
+          rm -rf app/build
+          
+          # Beri permission
           chmod +x gradlew
           chmod +x gradle/wrapper/gradle-wrapper.jar || true
-          chmod +x gradle/wrapper/gradle-wrapper.properties || true
           
-          # Set GRADLE_USER_HOME ke workspace
+          # Set environment
           export GRADLE_USER_HOME=$HOME/.gradle
+          export JAVA_OPTS="-Xmx2048m"
           
-          # Clean dan build dengan --no-daemon
-          ./gradlew clean --no-daemon
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          # Build dengan force
+          ./gradlew clean --no-daemon --refresh-dependencies
+          ./gradlew assembleRelease --no-daemon --refresh-dependencies --stacktrace
           cd ..
 
       - name: Find and rename APK
