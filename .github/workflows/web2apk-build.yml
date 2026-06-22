@@ -25,7 +25,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java & Android SDK
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl imagemagick zip jq wget unzip
+          sudo apt-get install -y curl imagemagick zip jq wget unzip nodejs npm
 
       - name: Get icon
         run: |
@@ -83,8 +83,12 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Install Bubblewrap via npm
+      - name: Build APK with Bubblewrap (Non-Interactive)
         run: |
+          # Set environment biar ga minta konfirmasi
+          export BUBBLEWRAP_YES=true
+          
+          # Install bubblewrap
           npm install -g @bubblewrap/cli
           
           # Create manifest
@@ -106,8 +110,10 @@ jobs:
           }
           EOF
           
-          # Build dengan bubblewrap
-          bubblewrap init --manifest manifest.json
+          # Init dengan flag --yes
+          echo "Y" | bubblewrap init --manifest manifest.json || bubblewrap init --manifest manifest.json --yes
+          
+          # Build
           bubblewrap build --output ./output
 
       - name: Upload APK
