@@ -60,7 +60,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
+          # HAPUS CACHE - INI YANG BIKIN ERROR!
+          # cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -75,9 +76,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install -g cordova
-          npm install -g cordova-res
-          npm install -g cordova-android
+          # Install tanpa cache
+          npm install -g cordova@latest
+          npm install -g cordova-res@latest
+          npm install -g cordova-android@latest
+          
+          # Verifikasi install
+          cordova --version
+          echo "✅ Dependencies installed"
 
       - name: Validate inputs
         id: validate
@@ -102,7 +108,7 @@ jobs:
           
           # Buat App ID jika tidak disediakan
           if [[ -z "${{ env.APP_ID }}" ]]; then
-            APP_ID="com.webapp.$(echo "${{ env.APP_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"
+            APP_ID="com.webapp.$(echo "${{ env.APP_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g' | cut -c1-20)"
             echo "APP_ID=$APP_ID" >> $GITHUB_ENV
             echo "✅ App ID otomatis: $APP_ID"
           else
@@ -114,14 +120,17 @@ jobs:
       - name: Create Cordova project
         run: |
           APP_ID_FIXED="${APP_ID:-com.webapp.myapp}"
+          
+          # Buat project
           cordova create app "$APP_ID_FIXED" "${{ env.APP_NAME }}"
+          
           cd app
           
           # Tambahkan platform Android
           cordova platform add android@latest
           
           # Setup config.xml
-          cat > config.xml << EOF
+          cat > config.xml << 'EOF'
           <?xml version='1.0' encoding='utf-8'?>
           <widget id="$APP_ID_FIXED" version="${{ env.VERSION }}" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
               <name>${{ env.APP_NAME }}</name>
@@ -145,7 +154,7 @@ jobs:
           
           # Buat file index.html minimal
           mkdir -p www
-          cat > www/index.html << EOF
+          cat > www/index.html << 'EOF'
           <!DOCTYPE html>
           <html>
           <head>
@@ -153,7 +162,8 @@ jobs:
               <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
               <title>${{ env.APP_NAME }}</title>
               <style>
-                  body { margin:0; padding:0; overflow:hidden; }
+                  * { margin:0; padding:0; }
+                  body { overflow:hidden; background:#000; }
                   iframe { 
                       width:100vw; 
                       height:100vh; 
@@ -165,11 +175,14 @@ jobs:
               </style>
           </head>
           <body>
-              <iframe src="${{ env.WEB_URL }}" allow="geolocation; microphone; camera; payment; autoplay" loading="lazy"></iframe>
+              <iframe src="${{ env.WEB_URL }}" allow="geolocation; microphone; camera; payment; autoplay"></iframe>
               <script>
-                  // Reload iframe when connection restored
                   window.addEventListener('online', () => {
                       document.querySelector('iframe').src = '${{ env.WEB_URL }}';
+                  });
+                  // Handle error
+                  window.addEventListener('error', function(e) {
+                      console.log('WebView error:', e.message);
                   });
               </script>
           </body>
@@ -182,47 +195,54 @@ jobs:
         if: env.ICON_URL != ''
         run: |
           cd app
+          
+          # Install ImageMagick untuk resize
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          
           mkdir -p res/icon/android
           
           echo "📥 Downloading icon from: ${{ env.ICON_URL }}"
-          curl -L "${{ env.ICON_URL }}" -o icon.png
           
-          if [[ ! -f icon.png ]]; then
-            echo "⚠️ Gagal download icon, menggunakan default"
-          else
+          # Download dengan timeout
+          curl -L --max-time 30 "${{ env.ICON_URL }}" -o icon.png || echo "⚠️ Gagal download"
+          
+          if [[ -f icon.png ]]; then
             # Resize untuk berbagai ukuran
-            for size in 192 144 96 72 48 36; do
-              convert icon.png -resize ${size}x${size} -background transparent -gravity center -extent ${size}x${size} res/icon/android/icon-${size}.png
+            for size in 512 192 144 96 72 48 36; do
+              convert icon.png -resize ${size}x${size} -background transparent -gravity center -extent ${size}x${size} res/icon/android/icon-${size}.png 2>/dev/null || echo "⚠️ Gagal resize $size"
             done
             
-            # Copy sebagai icon utama
-            cp icon.png res/icon/android/icon.png
-            cp icon.png www/img/icon.png 2>/dev/null || mkdir -p www/img && cp icon.png www/img/icon.png
             echo "✅ Icon berhasil di-set"
+          else
+            echo "⚠️ Icon tidak ditemukan, menggunakan default"
           fi
 
       - name: Build Android APK
         run: |
           cd app
           
+          # Generate debug keystore
+          keytool -genkey -v -keystore ../debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US" 2>/dev/null || true
+          
           # Build release
-          cordova build android --release -- --keystore=../debug.keystore --alias=androiddebugkey --storepass=android --keypass=android
+          echo "🔨 Building release APK..."
+          cordova build android --release -- --keystore=../debug.keystore --alias=androiddebugkey --storepass=android --keypass=android || true
           
           # Jika build release gagal, coba debug
           if [[ ! -f platforms/android/app/build/outputs/apk/release/app-release.apk ]]; then
             echo "⚠️ Build release gagal, mencoba debug..."
             cordova build android --debug
           fi
-
-      - name: Prepare debug keystore
-        run: |
-          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
-          echo "✅ Debug keystore created"
+          
+          # Cek hasil build
+          echo "📦 Checking build results..."
+          find . -name "*.apk" -type f || echo "⚠️ No APK found"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: webapk-${{ env.APP_NAME }}
+          name: webapk-${{ env.APP_NAME }}-${{ github.run_number }}
           path: |
             app/platforms/android/app/build/outputs/apk/**/*.apk
           retention-days: 30
@@ -238,10 +258,16 @@ jobs:
           prerelease: false
           generate_release_notes: false
           files: |
-            app/platforms/android/app/build/outputs/apk/release/*.apk
-            app/platforms/android/app/build/outputs/apk/debug/*.apk
+            app/platforms/android/app/build/outputs/apk/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Debug - Show files
+        if: always()
+        run: |
+          echo "📁 Directory structure:"
+          ls -la app/platforms/android/app/build/outputs/apk/ 2>/dev/null || echo "⚠️ No APK directory"
+          find . -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || echo "⚠️ No APK files found"
 
       - name: Send success notification
         if: success()
@@ -258,6 +284,10 @@ jobs:
           echo "📱 App: ${{ env.APP_NAME }}"
           echo "🌐 URL: ${{ env.WEB_URL }}"
           echo "🔍 Periksa logs di atas untuk detail error"
+          
+          # Tampilkan error log
+          echo "📋 Last 50 lines of build log:"
+          tail -50 /home/runner/.npm/_logs/*-debug.log 2>/dev/null || echo "No npm logs"
 
       - name: Cleanup
         if: always()
