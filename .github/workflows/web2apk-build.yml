@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (PNG/JPG)'
+        description: 'URL Icon (PNG/JPG) - Bisa URL file langsung atau URL release'
         required: true
         type: string
 
@@ -42,40 +42,78 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install PWABuilder (pengganti pwa2apk)
           npm install -g pwabuilder
-          
-          # Install ImageMagick untuk convert icon
           sudo apt-get update
-          sudo apt-get install -y imagemagick wget unzip
-          
-          # Verify installation
+          sudo apt-get install -y imagemagick wget unzip jq
           pwabuilder --version || echo "PWABuilder installed"
-          convert --version || echo "ImageMagick installed"
 
       - name: Download and prepare icon
         run: |
           echo "⬇️ Downloading icon from: ${{ inputs.icon_url }}"
           
-          # Download icon
-          wget -O icon.png "${{ inputs.icon_url }}"
+          ICON_URL="${{ inputs.icon_url }}"
+          
+          # Jika URL mengandung /releases/tag/, ambil asset pertama
+          if echo "$ICON_URL" | grep -q "/releases/tag/"; then
+            echo "🔄 Detected release URL, getting actual icon..."
+            
+            # Extract tag
+            TAG=$(echo "$ICON_URL" | sed 's/.*\/tag\///')
+            echo "📌 Tag: $TAG"
+            
+            # Get release info via GitHub API
+            RELEASE_INFO=$(curl -s \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
+            
+            # Find icon asset
+            ICON_ASSET_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | contains("icon") or endswith(".png") or endswith(".jpg")) | .url' | head -1)
+            
+            if [ -n "$ICON_ASSET_URL" ] && [ "$ICON_ASSET_URL" != "null" ]; then
+              echo "✅ Found icon asset: $ICON_ASSET_URL"
+              ICON_URL="$ICON_ASSET_URL"
+              
+              # Download via API
+              curl -L \
+                -H "Accept: application/octet-stream" \
+                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -o icon.png \
+                "$ICON_ASSET_URL"
+            else
+              echo "❌ No icon found in release"
+              # Use default icon
+              echo "🔄 Using default icon"
+              curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=${{ inputs.app_name }}"
+            fi
+          else
+            # Direct download
+            wget -O icon.png "$ICON_URL"
+          fi
           
           # Check if download successful
           if [ ! -f "icon.png" ]; then
-            echo "❌ Failed to download icon"
-            exit 1
+            echo "❌ Failed to download icon, using default"
+            convert -size 512x512 xc:transparent -fill black -gravity center \
+              -font Helvetica -pointsize 100 -annotate 0 "${{ inputs.app_name }}" \
+              -fill white -draw "rectangle 0,0 512,512" \
+              icon.png || curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=App"
           fi
           
           # Check if file is valid image
+          echo "🔍 Checking if file is valid image..."
           if ! file icon.png | grep -q "PNG image\|JPEG image"; then
             echo "❌ Downloaded file is not a valid image"
+            echo "📄 File type:"
             file icon.png
+            echo "📄 First 100 bytes:"
+            head -c 100 icon.png
             exit 1
           fi
           
           echo "✅ Icon downloaded successfully"
           
-          # Create icons directory with multiple sizes for PWA
+          # Create icons directory
           mkdir -p icons
           
           # Resize icon to multiple sizes
@@ -119,46 +157,16 @@ jobs:
           EOF
           
           # Build with PWABuilder
-          echo "🔄 Building with PWABuilder..."
           npx pwabuilder build \
             --manifest manifest.json \
             --platform android \
             --output ./output || {
               echo "⚠️ PWABuilder build failed, trying alternative..."
-              
-              # Alternative: Use PWA2APK from GitHub
-              echo "🔄 Method 2: Using PWA2APK from GitHub..."
-              git clone https://github.com/toly1994328/pwa2apk.git
-              cd pwa2apk
-              npm install
-              node index.js \
-                --url "${{ inputs.web_url }}" \
-                --name "${{ inputs.app_name }}" \
-                --icon ../icon.png \
-                --output ../output
-              cd ..
+              exit 1
           }
           
-          # Check if APK generated
-          echo "📂 Checking output directory..."
-          ls -la ./output/ || echo "No output directory"
-          
-          # Find APK in various locations
-          APK_FOUND=""
-          
-          # Check common locations
-          if [ -f "./output/app-release.apk" ]; then
-            APK_FOUND="./output/app-release.apk"
-          elif [ -f "./output/app.apk" ]; then
-            APK_FOUND="./output/app.apk"
-          elif [ -f "./output/android/app-release.apk" ]; then
-            APK_FOUND="./output/android/app-release.apk"
-          elif [ -f "./app-release.apk" ]; then
-            APK_FOUND="./app-release.apk"
-          else
-            # Search for any APK
-            APK_FOUND=$(find . -name "*.apk" -type f | head -1)
-          fi
+          # Find APK
+          APK_FOUND=$(find . -name "*.apk" -type f | head -1)
           
           if [ -n "$APK_FOUND" ] && [ -f "$APK_FOUND" ]; then
             echo "✅ APK found: $APK_FOUND"
@@ -167,8 +175,6 @@ jobs:
             echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
           else
             echo "❌ No APK found"
-            echo "📂 Directory structure:"
-            find . -type f -name "*.apk" 2>/dev/null || echo "No APK files"
             exit 1
           fi
 
@@ -177,7 +183,7 @@ jobs:
           APK_PATH="${{ steps.generate_apk.outputs.apk_path }}"
           
           if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-            echo "❌ APK not found at: $APK_PATH"
+            echo "❌ APK not found"
             exit 1
           fi
           
@@ -192,7 +198,6 @@ jobs:
           fi
           
           echo "✅ APK verified (${APK_SIZE_MB} MB)"
-          file "$APK_PATH"
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
@@ -212,16 +217,11 @@ jobs:
           echo "| App Name | ${{ inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Web URL | ${{ inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Run URL | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" == "success" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "✅ APK generated successfully!" >> $GITHUB_STEP_SUMMARY
-            echo "📥 Download APK from artifacts section above" >> $GITHUB_STEP_SUMMARY
           else
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Check the logs above for error details" >> $GITHUB_STEP_SUMMARY
           fi
