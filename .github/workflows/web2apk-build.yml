@@ -4,51 +4,32 @@ on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'Website URL to convert to APK'
+        description: 'Website URL'
         required: true
         type: string
-        default: 'https://example.com'
       app_name:
         description: 'App Name'
         required: true
         type: string
-        default: 'My Web App'
-      icon_url:
-        description: 'Icon URL (optional)'
-        required: false
-        type: string
-        default: ''
       package_name:
-        description: 'Package Name (optional)'
+        description: 'Package Name'
         required: false
         type: string
         default: 'com.web2apk.app'
 
 jobs:
-  build-web2apk:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: read
-      packages: write
       
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      # FIXED: Setup Node.js WITHOUT cache
+      - uses: actions/checkout@v4
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # HAPUS CACHE! GA PAKE LOCK FILE
-          cache: ''  # <-- INI YANG DIPERBAIKI
-          
-      - name: Install dependencies
-        run: |
-          # Install packages langsung global
-          npm install -g @capacitor/cli @capacitor/android @capacitor/core
-          npm install -g web2apk-cli
           
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -58,32 +39,17 @@ jobs:
           
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-34'
           
-      - name: Create Web2APK config
+      - name: Build APK
         run: |
-          mkdir -p web2apk-build
-          cat > web2apk-build/config.json << EOF
-          {
-            "web_url": "${{ github.event.inputs.web_url }}",
-            "app_name": "${{ github.event.inputs.app_name }}",
-            "package_name": "${{ github.event.inputs.package_name || 'com.web2apk.app' }}",
-            "version": "1.0.0",
-            "version_code": 1,
-            "icon_url": "${{ github.event.inputs.icon_url || '' }}"
-          }
-          EOF
+          # Install Capacitor
+          npm install -g @capacitor/cli @capacitor/android @capacitor/core
           
-      - name: Build Web2APK
-        run: |
-          # Buat folder project
-          mkdir -p webapp
-          cd webapp
+          # Buat project
+          mkdir app && cd app
           
-          # Buat file HTML sederhana
-          cat > index.html << EOF
-          <!DOCTYPE html>
+          # Web page
+          echo '<!DOCTYPE html>
           <html>
           <head>
             <meta charset="UTF-8">
@@ -93,62 +59,35 @@ jobs:
           <body style="margin:0;padding:0;height:100vh;overflow:hidden;">
             <iframe src="${{ github.event.inputs.web_url }}" style="width:100%;height:100%;border:none;"></iframe>
           </body>
-          </html>
-          EOF
-          
-          # Buat manifest
-          cat > manifest.json << EOF
-          {
-            "name": "${{ github.event.inputs.app_name }}",
-            "short_name": "${{ github.event.inputs.app_name }}",
-            "start_url": "index.html",
-            "display": "standalone",
-            "background_color": "#FFFFFF",
-            "theme_color": "#2196F3"
-          }
-          EOF
-          
-          # Install dependencies untuk project ini
-          npm init -y
-          npm install @capacitor/cli @capacitor/android @capacitor/core
+          </html>' > www/index.html
           
           # Init Capacitor
-          npx cap init "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.package_name || 'com.web2apk.app' }}"
+          npm init -y
+          npx cap init "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.package_name }}"
           npx cap add android
-          
-          # Copy file ke www
-          cp index.html www/
-          cp manifest.json www/
+          npx cap sync android
           
           # Build APK
-          npx cap sync android
-          npx cap open android || true
-          
-          # Build pakai gradle
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
-          cd ..
+          cd ../..
           
-          # Copy APK ke output
-          mkdir -p ../output
-          find android/app/build/outputs -name "*.apk" -exec cp {} ../output/app.apk \;
-          cd ..
+          # Copy APK
+          mkdir -p output
+          cp app/android/app/build/outputs/apk/debug/app-debug.apk output/app.apk || echo "No APK found"
           
-      - name: Upload APK
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-${{ github.event.inputs.app_name }}
+          name: app
           path: output/*
           
-      - name: Create Release
+      - name: Release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          name: "Web2APK - ${{ github.event.inputs.app_name }}"
-          tag_name: "web2apk-${{ github.run_number }}"
+          tag_name: web2apk-${{ github.run_number }}
           files: output/*
-          draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
