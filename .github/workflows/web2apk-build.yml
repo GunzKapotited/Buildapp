@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (PNG/JPG) - Bisa URL file langsung atau URL release'
+        description: 'URL Icon (PNG/JPG)'
         required: true
         type: string
 
@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '16'  # ← Pakai Node 16 (kompatibel dengan PWABuilder)
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -42,10 +42,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install -g pwabuilder
+          # Install PWA2APK dari NPM (bukan PWABuilder)
+          npm install -g pwa2apk
+          
+          # Install ImageMagick
           sudo apt-get update
           sudo apt-get install -y imagemagick wget unzip jq
-          pwabuilder --version || echo "PWABuilder installed"
+          
+          # Verify
+          pwa2apk --version || echo "pwa2apk installed"
 
       - name: Download and prepare icon
         run: |
@@ -59,17 +64,14 @@ jobs:
           get_icon_from_release() {
             local url="$1"
             
-            # Extract tag from URL
             local TAG=$(echo "$url" | sed 's/.*\/tag\///' | sed 's/?.*//')
             echo "📌 Extracted tag: $TAG"
             
-            # Get release info via GitHub API
             local RELEASE_INFO=$(curl -s \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
             
-            # Find icon asset (png/jpg/jpeg)
             local ICON_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | test("icon|png|jpg|jpeg"; "i")) | .browser_download_url' | head -1)
             
             if [ -n "$ICON_URL" ] && [ "$ICON_URL" != "null" ]; then
@@ -77,7 +79,6 @@ jobs:
               return 0
             fi
             
-            # If no icon, try any asset
             local ANY_ASSET=$(echo "$RELEASE_INFO" | jq -r '.assets[0].browser_download_url' 2>/dev/null)
             if [ -n "$ANY_ASSET" ] && [ "$ANY_ASSET" != "null" ]; then
               echo "$ANY_ASSET"
@@ -100,15 +101,13 @@ jobs:
               echo "✅ Found asset URL: $ICON_URL"
             else
               echo "❌ No asset found in release"
-              echo "🔄 Creating default icon using ImageMagick..."
+              echo "🔄 Creating default icon..."
               
-              # Create default icon with ImageMagick
               convert -size 512x512 xc:transparent \
                 -fill black -gravity center \
                 -font Helvetica -pointsize 80 \
                 -annotate +0+0 "${{ inputs.app_name }}" \
                 icon.png || {
-                  echo "❌ ImageMagick failed, creating empty PNG"
                   echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
                 }
               
@@ -123,7 +122,6 @@ jobs:
           # ============================================
           echo "⬇️ Downloading from: $ICON_URL"
           
-          # Try download with retry
           for i in 1 2 3; do
             echo "Attempt $i..."
             if curl -L -o icon.png "$ICON_URL" --fail --connect-timeout 10; then
@@ -139,7 +137,6 @@ jobs:
                   -font Helvetica -pointsize 80 \
                   -annotate +0+0 "${{ inputs.app_name }}" \
                   icon.png || {
-                    # Fallback: create 1x1 transparent PNG
                     echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
                   }
                 echo "✅ Default icon created"
@@ -149,7 +146,7 @@ jobs:
           done
           
           # ============================================
-          # Validate and fix icon
+          # Validate icon
           # ============================================
           if [ ! -f "icon.png" ]; then
             echo "❌ No icon file, creating default..."
@@ -160,7 +157,6 @@ jobs:
               icon.png
           fi
           
-          # Check if file is valid image
           if ! file icon.png | grep -q "PNG image\|JPEG image"; then
             echo "⚠️ File is not a valid image, creating default..."
             convert -size 512x512 xc:transparent \
@@ -170,61 +166,64 @@ jobs:
               icon.png
           fi
           
-          # Create icons directory
-          mkdir -p icons
-          cp icon.png icons/icon.png
+          # Resize to 512x512
+          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
           
           echo "✅ Icon ready:"
           file icon.png
           ls -la icon.png
 
-      - name: Generate APK using PWABuilder
+      - name: Generate APK using PWA2APK
         id: generate_apk
         run: |
           echo "🔨 Generating APK..."
           echo "📱 App Name: ${{ inputs.app_name }}"
           echo "🌐 Web URL: ${{ inputs.web_url }}"
           
-          # Create PWA manifest
-          cat > manifest.json << EOF
-          {
-            "name": "${{ inputs.app_name }}",
-            "short_name": "${{ inputs.app_name }}",
-            "start_url": "${{ inputs.web_url }}",
-            "display": "standalone",
-            "background_color": "#ffffff",
-            "theme_color": "#000000",
-            "icons": [
-              {
-                "src": "icons/icon.png",
-                "sizes": "512x512",
-                "type": "image/png"
-              }
-            ]
-          }
-          EOF
-          
           # Create output directory
           mkdir -p output
           
-          # Build with PWABuilder
-          npx pwabuilder build \
-            --manifest manifest.json \
-            --platform android \
-            --output ./output || {
-              echo "⚠️ PWABuilder failed, trying alternative..."
+          # Use pwa2apk (not PWABuilder)
+          pwa2apk \
+            --name "${{ inputs.app_name }}" \
+            --url "${{ inputs.web_url }}" \
+            --icon icon.png \
+            --output ./output \
+            --package "com.app.${{ github.run_id }}" || {
+              echo "⚠️ pwa2apk failed, trying alternative..."
               
-              # Alternative: Use simple webview wrapper
-              echo "🔄 Using pwa2apk from GitHub..."
-              git clone https://github.com/toly1994328/pwa2apk.git
-              cd pwa2apk
-              npm install
-              node index.js \
-                --url "${{ inputs.web_url }}" \
-                --name "${{ inputs.app_name }}" \
-                --icon ../icon.png \
-                --output ../output
-              cd ..
+              # Alternative: Build with webview
+              echo "🔄 Building with simple webview..."
+              
+              # Create simple Android project
+              mkdir -p android/app/src/main
+              
+              # Create AndroidManifest.xml
+              cat > AndroidManifest.xml << EOF
+              <?xml version="1.0" encoding="utf-8"?>
+              <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+                  package="com.app.${{ github.run_id }}">
+                  <application
+                      android:allowBackup="true"
+                      android:icon="@mipmap/ic_launcher"
+                      android:label="${{ inputs.app_name }}"
+                      android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                      <activity android:name=".MainActivity"
+                          android:exported="true">
+                          <intent-filter>
+                              <action android:name="android.intent.action.MAIN" />
+                              <category android:name="android.intent.category.LAUNCHER" />
+                          </intent-filter>
+                      </activity>
+                  </application>
+              </manifest>
+              EOF
+              
+              # Install Android build tools
+              sudo apt-get install -y android-sdk
+              
+              echo "⚠️ Alternative build method requires more setup"
+              exit 1
           }
           
           # Find APK
