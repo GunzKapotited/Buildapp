@@ -65,24 +65,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Cache Gradle
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Cache npm
-        uses: actions/cache@v3
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
       - name: Create package.json
         run: |
           npm init -y
@@ -105,7 +87,7 @@ jobs:
           echo "orientation=${{ github.event.inputs.orientation }}" >> $GITHUB_OUTPUT
           echo "display_mode=${{ github.event.inputs.display_mode }}" >> $GITHUB_OUTPUT
 
-      - name: Create web directory and files
+      - name: Create web files
         run: |
           mkdir -p www
           
@@ -122,14 +104,13 @@ jobs:
               {
                 "src": "icon.png",
                 "sizes": "512x512",
-                "type": "image/png",
-                "purpose": "any maskable"
+                "type": "image/png"
               }
             ]
           }
           EOF
 
-      - name: Download or create icon
+      - name: Create icon
         run: |
           if [ -n "${{ steps.vars.outputs.icon_url }}" ]; then
             wget -O www/icon.png "${{ steps.vars.outputs.icon_url }}" || echo "Icon download failed"
@@ -142,13 +123,6 @@ jobs:
               -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/icon.png || true
           fi
 
-      - name: Create splash screen
-        run: |
-          if command -v convert &> /dev/null; then
-            convert -size 1080x1920 xc:#1976d2 -font DejaVu-Sans -pointsize 60 -fill white \
-              -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/splash.png || true
-          fi
-
       - name: Create index.html
         run: |
           cat > www/index.html << 'EOF'
@@ -158,8 +132,6 @@ jobs:
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <meta name="theme-color" content="#1976d2">
-            <meta name="apple-mobile-web-app-capable" content="yes">
-            <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
             <link rel="manifest" href="manifest.json">
             <link rel="icon" href="icon.png">
             <title>APP_NAME_PLACEHOLDER</title>
@@ -266,13 +238,7 @@ jobs:
           sed -i "s|APP_NAME_PLACEHOLDER|${{ steps.vars.outputs.app_name }}|g" www/index.html
           sed -i "s|WEB_URL_PLACEHOLDER|${{ steps.vars.outputs.web_url }}|g" www/index.html
 
-      - name: Remove existing android folder if exists
-        run: |
-          if [ -d "android" ]; then
-            rm -rf android
-          fi
-
-      - name: Initialize Capacitor
+      - name: Initialize Capacitor Android
         run: |
           npx cap init \
             "${{ steps.vars.outputs.app_name }}" \
@@ -280,9 +246,66 @@ jobs:
             --web-dir=www
           
           npx cap add android
-          
-          # Buat file AndroidManifest.xml yang lebih lengkap
-          cat > android/app/src/main/AndroidManifest.xml << EOF
+
+      - name: Configure Android
+        run: |
+          # Update build.gradle project level
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+            repositories {
+              google()
+              mavenCentral()
+            }
+            dependencies {
+              classpath 'com.android.tools.build:gradle:7.4.2'
+            }
+          }
+
+          allprojects {
+            repositories {
+              google()
+              mavenCentral()
+            }
+          }
+
+          task clean(type: Delete) {
+            delete rootProject.buildDir
+          }
+          EOF
+
+          # Update app build.gradle
+          cat > android/app/build.gradle << 'EOF'
+          apply plugin: 'com.android.application'
+
+          android {
+            namespace "${{ steps.vars.outputs.package_name }}"
+            compileSdk 33
+            defaultConfig {
+              applicationId "${{ steps.vars.outputs.package_name }}"
+              minSdk 21
+              targetSdk 33
+              versionCode 1
+              versionName "1.0"
+            }
+            buildTypes {
+              release {
+                minifyEnabled false
+                proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                signingConfig signingConfigs.debug
+              }
+            }
+          }
+
+          dependencies {
+            implementation fileTree(include: ['*.jar'], dir: 'libs')
+            implementation project(':capacitor-android')
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'androidx.webkit:webkit:1.7.0'
+          }
+          EOF
+
+          # Buat AndroidManifest
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="${{ steps.vars.outputs.package_name }}">
@@ -293,8 +316,7 @@ jobs:
                 android:roundIcon="@mipmap/ic_launcher_round"
                 android:supportsRtl="true"
                 android:theme="@style/AppTheme"
-                android:usesCleartextTraffic="true"
-                android:networkSecurityConfig="@xml/network_security_config">
+                android:usesCleartextTraffic="true">
               <activity
                   android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
                   android:name=".MainActivity"
@@ -307,166 +329,56 @@ jobs:
                   <category android:name="android.intent.category.LAUNCHER" />
                 </intent-filter>
               </activity>
-              <provider
-                  android:name="androidx.core.content.FileProvider"
-                  android:authorities="\${applicationId}.fileprovider"
-                  android:exported="false"
-                  android:grantUriPermissions="true">
-                <meta-data
-                    android:name="android.support.FILE_PROVIDER_PATHS"
-                    android:resource="@xml/file_paths" />
-              </provider>
             </application>
             <uses-permission android:name="android.permission.INTERNET" />
-            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
           </manifest>
           EOF
 
-      - name: Create network security config
-        run: |
-          mkdir -p android/app/src/main/res/xml
-          cat > android/app/src/main/res/xml/network_security_config.xml << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <network-security-config>
-            <domain-config cleartextTrafficPermitted="true">
-              <domain includeSubdomains="true">${{ steps.vars.outputs.domain }}</domain>
-            </domain-config>
-            <base-config cleartextTrafficPermitted="true" />
-          </network-security-config>
+          # Buat gradle wrapper properties
+          mkdir -p android/gradle/wrapper
+          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-7.5-all.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
           EOF
 
-      - name: Update build.gradle
-        run: |
-          cat > android/app/build.gradle << EOF
-          apply plugin: 'com.android.application'
-          
-          android {
-            namespace "${{ steps.vars.outputs.package_name }}"
-            compileSdk 33
-            defaultConfig {
-              applicationId "${{ steps.vars.outputs.package_name }}"
-              minSdk 21
-              targetSdk 33
-              versionCode 1
-              versionName "1.0"
-              testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-            }
-            buildTypes {
-              release {
-                minifyEnabled false
-                proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                signingConfig signingConfigs.debug
-              }
-            }
-          }
-          
-          repositories {
-            google()
-            mavenCentral()
-          }
-          
-          dependencies {
-            implementation fileTree(include: ['*.jar'], dir: 'libs')
-            implementation project(':capacitor-android')
-            implementation 'androidx.appcompat:appcompat:1.6.1'
-            implementation 'androidx.webkit:webkit:1.7.0'
-            implementation 'androidx.core:core-splashscreen:1.0.0'
-          }
-          EOF
-
-      - name: Update gradle wrapper to 8.7
-        run: |
-          cd android
-          # Hapus cache yang corrupt
-          rm -rf ~/.gradle/caches/jars-9/ 2>/dev/null || true
-          rm -rf ~/.gradle/wrapper/dists/gradle-8.7-all 2>/dev/null || true
-          
-          # Update wrapper
-          ./gradlew wrapper --gradle-version=8.7 --distribution-type=all --no-daemon || {
-            echo "Wrapper update failed, trying with cleanup..."
-            ./gradlew --stop
-            rm -rf ~/.gradle/caches/
-            ./gradlew wrapper --gradle-version=8.7 --distribution-type=all --no-daemon
-          }
-          cd ..
-
-      - name: Build APK with debug
+      - name: Build APK
         run: |
           cd android
           chmod +x gradlew
-          
-          # Stop existing daemon
-          ./gradlew --stop || true
-          
-          # Clean and build with full debug
-          echo "=== Cleaning project ==="
-          ./gradlew clean --no-daemon --stacktrace || {
-            echo "Clean failed, trying to continue..."
-          }
-          
-          echo "=== Building APK ==="
-          ./gradlew assembleRelease --no-daemon --stacktrace --info || {
-            echo "Build failed, trying debug build..."
-            ./gradlew assembleDebug --no-daemon --stacktrace
-          }
-          
-          # List all build outputs for debugging
-          echo "=== Build outputs ==="
-          find . -type d -name "build" -o -name "outputs" | head -20
-          find . -name "*.apk" 2>/dev/null || echo "No APK found in android folder"
-          
+          ./gradlew assembleRelease --no-daemon
           cd ..
-          
-          # Also check from root
-          echo "=== All APK files ==="
-          find . -name "*.apk" 2>/dev/null || echo "No APK found anywhere"
 
       - name: Find and rename APK
         run: |
-          echo "Searching for APK files..."
-          find . -name "*.apk" -type f 2>/dev/null
-          
-          APK_PATH=$(find . -name "*.apk" -type f | grep -E "android/app/build/outputs" | head -n 1)
+          APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -n 1)
           
           if [ -n "$APK_PATH" ]; then
             echo "Found APK at: $APK_PATH"
             mkdir -p output
             cp "$APK_PATH" "output/${{ steps.vars.outputs.app_name }}.apk"
-            echo "APK copied to output/${{ steps.vars.outputs.app_name }}.apk"
-            echo "apk_path=output/${{ steps.vars.outputs.app_name }}.apk" >> $GITHUB_OUTPUT
+            echo "APK saved to output/${{ steps.vars.outputs.app_name }}.apk"
           else
-            echo "No APK found in build outputs!"
-            echo "Trying to find any APK..."
-            ANY_APK=$(find . -name "*.apk" -type f | head -n 1)
-            if [ -n "$ANY_APK" ]; then
-              echo "Found APK at: $ANY_APK"
-              mkdir -p output
-              cp "$ANY_APK" "output/${{ steps.vars.outputs.app_name }}.apk"
-              echo "APK copied to output/${{ steps.vars.outputs.app_name }}.apk"
-              echo "apk_path=output/${{ steps.vars.outputs.app_name }}.apk" >> $GITHUB_OUTPUT
-            else
-              echo "No APK found at all!"
-              echo "Directory structure:"
-              ls -la android/app/build/ 2>/dev/null || echo "Build directory not found"
-              ls -la android/app/ 2>/dev/null || echo "App directory not found"
-              exit 1
-            fi
+            echo "No APK found!"
+            exit 1
           fi
 
-      - name: Upload APK as artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-${{ steps.vars.outputs.app_name }}
+          name: ${{ steps.vars.outputs.app_name }}
           path: output/*.apk
           retention-days: 30
 
-      - name: Create release and upload APK
+      - name: Create release
         if: success()
         run: |
           if [ -f "output/${{ steps.vars.outputs.app_name }}.apk" ]; then
             TAG="web2apk-$(date +'%Y%m%d-%H%M%S')"
             
-            RESPONSE=$(curl -L \
+            curl -L \
               -X POST \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -474,16 +386,17 @@ jobs:
               "https://api.github.com/repos/${{ github.repository }}/releases" \
               -d "{
                 \"tag_name\": \"$TAG\",
-                \"name\": \"${{ steps.vars.outputs.app_name }} - Web2APK $TAG\",
+                \"name\": \"${{ steps.vars.outputs.app_name }} - APK $TAG\",
                 \"draft\": false,
                 \"prerelease\": false
-              }")
+              }"
             
-            RELEASE_ID=$(echo $RESPONSE | jq -r '.id')
-            UPLOAD_URL=$(echo $RESPONSE | jq -r '.upload_url' | sed 's/{?name,label}//')
-            
-            echo "Release ID: $RELEASE_ID"
-            echo "Upload URL: $UPLOAD_URL"
+            # Upload APK ke release
+            RELEASE_ID=$(curl -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" | jq -r '.id')
             
             curl -L \
               -X POST \
@@ -491,21 +404,6 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               -H "Content-Type: application/vnd.android.package-archive" \
-              "$UPLOAD_URL?name=${{ steps.vars.outputs.app_name }}.apk" \
+              "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=${{ steps.vars.outputs.app_name }}.apk" \
               --data-binary "@output/${{ steps.vars.outputs.app_name }}.apk"
-          else
-            echo "No APK to upload to release"
           fi
-
-      - name: Display download info
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "📱 Web2APK Build Complete!"
-          echo "📦 APK: ${{ steps.vars.outputs.app_name }}.apk"
-          echo "=========================================="
-          echo ""
-          echo "📥 Download APK from artifacts or release"
-          echo ""
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
