@@ -1,10 +1,10 @@
-name: Web to APK Build
+name: Web2APK Builder
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'URL website yang akan dijadikan APK'
+        description: 'URL Website untuk dijadikan APK'
         required: true
         type: string
         default: 'https://example.com'
@@ -14,38 +14,43 @@ on:
         type: string
         default: 'MyWebApp'
       icon_url:
-        description: 'URL Icon (PNG, minimal 512x512)'
+        description: 'URL Icon (opsional)'
         required: false
         type: string
         default: ''
-      package_name:
-        description: 'Package Name (com.example.app)'
+      app_id:
+        description: 'Package ID (opsional)'
         required: false
         type: string
-        default: 'com.webapp.myapp'
+        default: ''
+      version:
+        description: 'Versi Aplikasi'
+        required: false
+        type: string
+        default: '1.0.0'
       orientation:
         description: 'Orientasi Layar'
         required: false
         type: choice
-        default: 'default'
         options:
           - default
           - portrait
           - landscape
-      display_mode:
-        description: 'Mode Tampilan'
-        required: false
-        type: choice
-        default: 'standalone'
-        options:
-          - standalone
-          - fullscreen
-          - minimal-ui
-          - browser
+        default: 'portrait'
+
+env:
+  APP_NAME: ${{ github.event.inputs.app_name }}
+  WEB_URL: ${{ github.event.inputs.web_url }}
+  ICON_URL: ${{ github.event.inputs.icon_url }}
+  APP_ID: ${{ github.event.inputs.app_id }}
+  VERSION: ${{ github.event.inputs.version }}
+  ORIENTATION: ${{ github.event.inputs.orientation }}
 
 jobs:
   build-web2apk:
+    name: Build Web to APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     
     steps:
       - name: Checkout repository
@@ -55,8 +60,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+          cache: 'npm'
 
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -64,346 +70,198 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0'
 
-      - name: Create package.json
+      - name: Install dependencies
         run: |
-          npm init -y
+          npm install -g cordova
+          npm install -g cordova-res
+          npm install -g cordova-android
 
-      - name: Install Capacitor
+      - name: Validate inputs
+        id: validate
         run: |
-          npm install @capacitor/cli @capacitor/android @capacitor/core
-          npm install -g @capacitor/cli
-
-      - name: Set environment variables
-        id: vars
-        run: |
-          WEB_URL="${{ github.event.inputs.web_url }}"
-          DOMAIN=$(echo "$WEB_URL" | sed -E 's|^https?://||' | cut -d'/' -f1)
-          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
-          echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
-          echo "app_name=${{ github.event.inputs.app_name }}" >> $GITHUB_OUTPUT
-          echo "package_name=${{ github.event.inputs.package_name }}" >> $GITHUB_OUTPUT
-          echo "icon_url=${{ github.event.inputs.icon_url }}" >> $GITHUB_OUTPUT
-          echo "orientation=${{ github.event.inputs.orientation }}" >> $GITHUB_OUTPUT
-          echo "display_mode=${{ github.event.inputs.display_mode }}" >> $GITHUB_OUTPUT
-
-      - name: Create web files
-        run: |
-          mkdir -p www
+          # Validasi URL
+          if [[ -z "${{ env.WEB_URL }}" ]]; then
+            echo "❌ ERROR: Web URL tidak boleh kosong"
+            exit 1
+          fi
           
-          cat > www/manifest.json << EOF
-          {
-            "name": "${{ steps.vars.outputs.app_name }}",
-            "short_name": "${{ steps.vars.outputs.app_name }}",
-            "start_url": "${{ steps.vars.outputs.web_url }}",
-            "display": "${{ steps.vars.outputs.display_mode }}",
-            "orientation": "${{ steps.vars.outputs.orientation }}",
-            "background_color": "#ffffff",
-            "theme_color": "#1976d2",
-            "icons": [
-              {
-                "src": "icon.png",
-                "sizes": "512x512",
-                "type": "image/png"
-              }
-            ]
-          }
+          # Validasi format URL
+          if [[ ! "${{ env.WEB_URL }}" =~ ^https?:// ]]; then
+            echo "❌ ERROR: URL harus diawali dengan http:// atau https://"
+            exit 1
+          fi
+          
+          # Validasi nama aplikasi
+          if [[ -z "${{ env.APP_NAME }}" ]]; then
+            echo "❌ ERROR: Nama aplikasi tidak boleh kosong"
+            exit 1
+          fi
+          
+          # Buat App ID jika tidak disediakan
+          if [[ -z "${{ env.APP_ID }}" ]]; then
+            APP_ID="com.webapp.$(echo "${{ env.APP_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')"
+            echo "APP_ID=$APP_ID" >> $GITHUB_ENV
+            echo "✅ App ID otomatis: $APP_ID"
+          else
+            echo "✅ App ID: ${{ env.APP_ID }}"
+          fi
+          
+          echo "✅ Validasi berhasil"
+
+      - name: Create Cordova project
+        run: |
+          APP_ID_FIXED="${APP_ID:-com.webapp.myapp}"
+          cordova create app "$APP_ID_FIXED" "${{ env.APP_NAME }}"
+          cd app
+          
+          # Tambahkan platform Android
+          cordova platform add android@latest
+          
+          # Setup config.xml
+          cat > config.xml << EOF
+          <?xml version='1.0' encoding='utf-8'?>
+          <widget id="$APP_ID_FIXED" version="${{ env.VERSION }}" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+              <name>${{ env.APP_NAME }}</name>
+              <description>Web App ${{ env.APP_NAME }}</description>
+              <author email="build@example.com" href="${{ env.WEB_URL }}">Build Team</author>
+              <content src="${{ env.WEB_URL }}" />
+              <access origin="*" />
+              <allow-intent href="http://*/*" />
+              <allow-intent href="https://*/*" />
+              <allow-navigation href="*" />
+              <preference name="Orientation" value="${{ env.ORIENTATION }}" />
+              <preference name="Fullscreen" value="false" />
+              <preference name="StatusBarOverlaysWebView" value="false" />
+              <preference name="StatusBarBackgroundColor" value="#000000" />
+              <preference name="android-minSdkVersion" value="21" />
+              <preference name="android-targetSdkVersion" value="34" />
+              <preference name="android-compileSdkVersion" value="34" />
+              <preference name="android-buildToolsVersion" value="34.0.0" />
+          </widget>
           EOF
-
-      - name: Create icon
-        run: |
-          if [ -n "${{ steps.vars.outputs.icon_url }}" ]; then
-            wget -O www/icon.png "${{ steps.vars.outputs.icon_url }}" || echo "Icon download failed"
-          fi
           
-          if [ ! -f www/icon.png ]; then
-            sudo apt-get update
-            sudo apt-get install -y imagemagick
-            convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
-              -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/icon.png || true
-          fi
-
-      - name: Create index.html
-        run: |
-          cat > www/index.html << 'EOF'
+          # Buat file index.html minimal
+          mkdir -p www
+          cat > www/index.html << EOF
           <!DOCTYPE html>
           <html>
           <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <meta name="theme-color" content="#1976d2">
-            <link rel="manifest" href="manifest.json">
-            <link rel="icon" href="icon.png">
-            <title>APP_NAME_PLACEHOLDER</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { 
-                width: 100%; 
-                height: 100vh; 
-                overflow: hidden;
-                background: #ffffff;
-              }
-              iframe {
-                width: 100%;
-                height: 100%;
-                border: none;
-                display: block;
-              }
-              #loading {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                background: #ffffff;
-                z-index: 1000;
-                transition: opacity 0.5s ease;
-              }
-              #loading.hidden {
-                opacity: 0;
-                pointer-events: none;
-              }
-              .spinner {
-                width: 48px;
-                height: 48px;
-                border: 4px solid #e0e0e0;
-                border-top-color: #1976d2;
-                border-radius: 50%;
-                animation: spin 0.8s linear infinite;
-              }
-              @keyframes spin {
-                to { transform: rotate(360deg); }
-              }
-              .app-name {
-                margin-top: 20px;
-                font-family: system-ui, -apple-system, sans-serif;
-                font-size: 18px;
-                color: #333;
-              }
-            </style>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+              <title>${{ env.APP_NAME }}</title>
+              <style>
+                  body { margin:0; padding:0; overflow:hidden; }
+                  iframe { 
+                      width:100vw; 
+                      height:100vh; 
+                      border:none; 
+                      position:fixed;
+                      top:0;
+                      left:0;
+                  }
+              </style>
           </head>
           <body>
-            <div id="loading">
-              <div class="spinner"></div>
-              <div class="app-name">APP_NAME_PLACEHOLDER</div>
-            </div>
-            <iframe 
-              id="webview"
-              src="WEB_URL_PLACEHOLDER"
-              allow="camera; microphone; geolocation; payment; clipboard-read; clipboard-write"
-              allowfullscreen>
-            </iframe>
-            <script>
-              const loading = document.getElementById('loading');
-              const iframe = document.getElementById('webview');
-              
-              iframe.addEventListener('load', () => {
-                setTimeout(() => {
-                  loading.classList.add('hidden');
-                }, 500);
-              });
-              
-              setTimeout(() => {
-                loading.classList.add('hidden');
-              }, 10000);
-              
-              iframe.addEventListener('error', () => {
-                loading.innerHTML = \`
-                  <div style="text-align:center;padding:20px;">
-                    <div style="font-size:48px;margin-bottom:16px;">🌐</div>
-                    <h3 style="color:#333;">Failed to load website</h3>
-                    <p style="color:#666;margin-top:8px;">Please check your internet connection</p>
-                    <button onclick="location.reload()" style="
-                      margin-top:20px;
-                      padding:10px 30px;
-                      background:#1976d2;
-                      color:white;
-                      border:none;
-                      border-radius:8px;
-                      font-size:16px;
-                      cursor:pointer;
-                    ">Retry</button>
-                  </div>
-                \`;
-              });
-            </script>
+              <iframe src="${{ env.WEB_URL }}" allow="geolocation; microphone; camera; payment; autoplay" loading="lazy"></iframe>
+              <script>
+                  // Reload iframe when connection restored
+                  window.addEventListener('online', () => {
+                      document.querySelector('iframe').src = '${{ env.WEB_URL }}';
+                  });
+              </script>
           </body>
           </html>
           EOF
           
-          sed -i "s|APP_NAME_PLACEHOLDER|${{ steps.vars.outputs.app_name }}|g" www/index.html
-          sed -i "s|WEB_URL_PLACEHOLDER|${{ steps.vars.outputs.web_url }}|g" www/index.html
+          echo "✅ Cordova project created"
 
-      - name: Initialize Capacitor Android
+      - name: Download and set icon
+        if: env.ICON_URL != ''
         run: |
-          npx cap init \
-            "${{ steps.vars.outputs.app_name }}" \
-            "${{ steps.vars.outputs.package_name }}" \
-            --web-dir=www
+          cd app
+          mkdir -p res/icon/android
           
-          npx cap add android
-
-      - name: Configure Android
-        run: |
-          # Update build.gradle project level
-          cat > android/build.gradle << 'EOF'
-          buildscript {
-            repositories {
-              google()
-              mavenCentral()
-            }
-            dependencies {
-              classpath 'com.android.tools.build:gradle:7.4.2'
-            }
-          }
-
-          allprojects {
-            repositories {
-              google()
-              mavenCentral()
-            }
-          }
-
-          task clean(type: Delete) {
-            delete rootProject.buildDir
-          }
-          EOF
-
-          # Update app build.gradle
-          cat > android/app/build.gradle << 'EOF'
-          apply plugin: 'com.android.application'
-
-          android {
-            namespace "${{ steps.vars.outputs.package_name }}"
-            compileSdk 33
-            defaultConfig {
-              applicationId "${{ steps.vars.outputs.package_name }}"
-              minSdk 21
-              targetSdk 33
-              versionCode 1
-              versionName "1.0"
-            }
-            buildTypes {
-              release {
-                minifyEnabled false
-                proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                signingConfig signingConfigs.debug
-              }
-            }
-          }
-
-          dependencies {
-            implementation fileTree(include: ['*.jar'], dir: 'libs')
-            implementation project(':capacitor-android')
-            implementation 'androidx.appcompat:appcompat:1.6.1'
-            implementation 'androidx.webkit:webkit:1.7.0'
-          }
-          EOF
-
-          # Buat AndroidManifest
-          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="${{ steps.vars.outputs.package_name }}">
-            <application
-                android:allowBackup="true"
-                android:icon="@mipmap/ic_launcher"
-                android:label="${{ steps.vars.outputs.app_name }}"
-                android:roundIcon="@mipmap/ic_launcher_round"
-                android:supportsRtl="true"
-                android:theme="@style/AppTheme"
-                android:usesCleartextTraffic="true">
-              <activity
-                  android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
-                  android:name=".MainActivity"
-                  android:label="${{ steps.vars.outputs.app_name }}"
-                  android:theme="@style/AppTheme.NoActionBarLaunch"
-                  android:launchMode="singleTask"
-                  android:exported="true">
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN" />
-                  <category android:name="android.intent.category.LAUNCHER" />
-                </intent-filter>
-              </activity>
-            </application>
-            <uses-permission android:name="android.permission.INTERNET" />
-          </manifest>
-          EOF
-
-          # Buat gradle wrapper properties
-          mkdir -p android/gradle/wrapper
-          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-7.5-all.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-
-      - name: Build APK
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
-          cd ..
-
-      - name: Find and rename APK
-        run: |
-          APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -n 1)
+          echo "📥 Downloading icon from: ${{ env.ICON_URL }}"
+          curl -L "${{ env.ICON_URL }}" -o icon.png
           
-          if [ -n "$APK_PATH" ]; then
-            echo "Found APK at: $APK_PATH"
-            mkdir -p output
-            cp "$APK_PATH" "output/${{ steps.vars.outputs.app_name }}.apk"
-            echo "APK saved to output/${{ steps.vars.outputs.app_name }}.apk"
+          if [[ ! -f icon.png ]]; then
+            echo "⚠️ Gagal download icon, menggunakan default"
           else
-            echo "No APK found!"
-            exit 1
+            # Resize untuk berbagai ukuran
+            for size in 192 144 96 72 48 36; do
+              convert icon.png -resize ${size}x${size} -background transparent -gravity center -extent ${size}x${size} res/icon/android/icon-${size}.png
+            done
+            
+            # Copy sebagai icon utama
+            cp icon.png res/icon/android/icon.png
+            cp icon.png www/img/icon.png 2>/dev/null || mkdir -p www/img && cp icon.png www/img/icon.png
+            echo "✅ Icon berhasil di-set"
           fi
 
-      - name: Upload APK artifact
+      - name: Build Android APK
+        run: |
+          cd app
+          
+          # Build release
+          cordova build android --release -- --keystore=../debug.keystore --alias=androiddebugkey --storepass=android --keypass=android
+          
+          # Jika build release gagal, coba debug
+          if [[ ! -f platforms/android/app/build/outputs/apk/release/app-release.apk ]]; then
+            echo "⚠️ Build release gagal, mencoba debug..."
+            cordova build android --debug
+          fi
+
+      - name: Prepare debug keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+          echo "✅ Debug keystore created"
+
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.vars.outputs.app_name }}
-          path: output/*.apk
+          name: webapk-${{ env.APP_NAME }}
+          path: |
+            app/platforms/android/app/build/outputs/apk/**/*.apk
           retention-days: 30
 
       - name: Create release
         if: success()
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: web2apk-${{ env.APP_NAME }}-${{ github.run_number }}
+          name: Web2APK - ${{ env.APP_NAME }} v${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          files: |
+            app/platforms/android/app/build/outputs/apk/release/*.apk
+            app/platforms/android/app/build/outputs/apk/debug/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Send success notification
+        if: success()
         run: |
-          if [ -f "output/${{ steps.vars.outputs.app_name }}.apk" ]; then
-            TAG="web2apk-$(date +'%Y%m%d-%H%M%S')"
-            
-            curl -L \
-              -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${{ github.repository }}/releases" \
-              -d "{
-                \"tag_name\": \"$TAG\",
-                \"name\": \"${{ steps.vars.outputs.app_name }} - APK $TAG\",
-                \"draft\": false,
-                \"prerelease\": false
-              }"
-            
-            # Upload APK ke release
-            RELEASE_ID=$(curl -L \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" | jq -r '.id')
-            
-            curl -L \
-              -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              -H "Content-Type: application/vnd.android.package-archive" \
-              "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=${{ steps.vars.outputs.app_name }}.apk" \
-              --data-binary "@output/${{ steps.vars.outputs.app_name }}.apk"
-          fi
+          echo "✅ Web2APK build berhasil!"
+          echo "📱 App: ${{ env.APP_NAME }}"
+          echo "🌐 URL: ${{ env.WEB_URL }}"
+          echo "📦 Release: ${{ steps.create_release.outputs.url }}"
+
+      - name: Send failure notification
+        if: failure()
+        run: |
+          echo "❌ Web2APK build gagal!"
+          echo "📱 App: ${{ env.APP_NAME }}"
+          echo "🌐 URL: ${{ env.WEB_URL }}"
+          echo "🔍 Periksa logs di atas untuk detail error"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd app 2>/dev/null && cordova clean 2>/dev/null || true
+          rm -rf app 2>/dev/null || true
+          echo "🧹 Cleanup selesai"
