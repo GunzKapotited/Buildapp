@@ -25,16 +25,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Docker
+      - name: Setup Java & Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl imagemagick zip jq
-          # Install Docker
-          curl -fsSL https://get.docker.com -o get-docker.sh
-          sudo sh get-docker.sh
-          sudo usermod -aG docker $USER
-          # Restart Docker
-          sudo systemctl restart docker
+          sudo apt-get install -y curl imagemagick zip jq wget unzip
 
       - name: Get icon
         run: |
@@ -80,8 +83,10 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Build APK with Docker
+      - name: Install Bubblewrap via npm
         run: |
+          npm install -g @bubblewrap/cli
+          
           # Create manifest
           cat > manifest.json << EOF
           {
@@ -101,22 +106,9 @@ jobs:
           }
           EOF
           
-          # Build using Docker image with Android SDK
-          docker run --rm \
-            -v $(pwd):/app \
-            -w /app \
-            openjdk:17-jdk-slim \
-            sh -c "
-              apt-get update && apt-get install -y wget unzip
-              # Download bubblewrap
-              wget -O bubblewrap.jar https://github.com/GoogleChromeLabs/bubblewrap/releases/download/v1.24.1/bubblewrap.jar || \
-              wget -O bubblewrap.jar https://github.com/GoogleChromeLabs/bubblewrap/releases/download/v1.24.0/bubblewrap.jar || \
-              wget -O bubblewrap.jar https://github.com/GoogleChromeLabs/bubblewrap/releases/download/v1.23.0/bubblewrap.jar
-              
-              # Build with bubblewrap
-              java -jar bubblewrap.jar init --manifest manifest.json
-              java -jar bubblewrap.jar build --output ./output
-            "
+          # Build dengan bubblewrap
+          bubblewrap init --manifest manifest.json
+          bubblewrap build --output ./output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
