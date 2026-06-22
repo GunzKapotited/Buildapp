@@ -38,8 +38,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip imagemagick jq curl nodejs npm
-          npm install -g @pwabuilder/pwabuilder
+          sudo apt-get install -y wget unzip imagemagick jq curl git
 
       - name: Download icon
         run: |
@@ -85,33 +84,23 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Build APK with PWA Builder
+      - name: Build APK with PWA2APK
         run: |
-          # Create manifest
-          cat > manifest.json << EOF
-          {
-            "name": "${{ inputs.app_name }}",
-            "short_name": "${{ inputs.app_name }}",
-            "start_url": "${{ inputs.web_url }}",
-            "display": "standalone",
-            "background_color": "#ffffff",
-            "theme_color": "#000000",
-            "icons": [
-              {
-                "src": "icon.png",
-                "sizes": "512x512",
-                "type": "image/png"
-              }
-            ]
-          }
-          EOF
+          # Clone PWA2APK
+          git clone https://github.com/tomchen/pwa2apk.git
+          cd pwa2apk
           
-          # Build with npx
-          npx @pwabuilder/cli build --manifest manifest.json --platform android --out ./output
+          # Copy manifest and icon
+          cp ../manifest.json .
+          cp ../icon.png .
+          
+          # Build
+          chmod +x pwa2apk.sh
+          ./pwa2apk.sh --name "${{ inputs.app_name }}" --url "${{ inputs.web_url }}" --icon icon.png
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: web2apk-${{ inputs.app_name }}
-          path: ./output/*.apk
+          path: ./pwa2apk/*.apk
           retention-days: 7
