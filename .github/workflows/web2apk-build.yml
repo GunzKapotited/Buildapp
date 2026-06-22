@@ -354,14 +354,19 @@ jobs:
           }
           EOF
 
-      - name: Clean Gradle cache and build
+      - name: Fix Gradle permissions and build
         run: |
-          rm -rf ~/.gradle/caches/
-          rm -rf android/.gradle
           cd android
           chmod +x gradlew
-          ./gradlew clean
-          ./gradlew assembleRelease --no-daemon
+          chmod +x gradle/wrapper/gradle-wrapper.jar || true
+          chmod +x gradle/wrapper/gradle-wrapper.properties || true
+          
+          # Set GRADLE_USER_HOME ke workspace
+          export GRADLE_USER_HOME=$HOME/.gradle
+          
+          # Clean dan build dengan --no-daemon
+          ./gradlew clean --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
           cd ..
 
       - name: Find and rename APK
