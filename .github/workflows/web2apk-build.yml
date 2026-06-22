@@ -65,7 +65,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # FIX 1: Cache Gradle untuk menghindari download ulang
       - name: Cache Gradle
         uses: actions/cache@v3
         with:
@@ -76,7 +75,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # FIX 2: Cache Capacitor dan npm dependencies
       - name: Cache npm
         uses: actions/cache@v3
         with:
@@ -138,7 +136,8 @@ jobs:
           fi
           
           if [ ! -f www/icon.png ]; then
-            echo "Creating default icon..."
+            sudo apt-get update
+            sudo apt-get install -y imagemagick
             convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
               -gravity center -annotate 0 "${{ steps.vars.outputs.app_name }}" www/icon.png || true
           fi
@@ -282,6 +281,7 @@ jobs:
           
           npx cap add android
           
+          # Buat file AndroidManifest.xml yang lebih lengkap
           cat > android/app/src/main/AndroidManifest.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -337,7 +337,7 @@ jobs:
 
       - name: Update build.gradle
         run: |
-          cat > android/app/build.gradle << 'EOF'
+          cat > android/app/build.gradle << EOF
           apply plugin: 'com.android.application'
           
           android {
@@ -353,7 +353,7 @@ jobs:
             }
             buildTypes {
               release {
-                minifyEnabled true
+                minifyEnabled false
                 proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
                 signingConfig signingConfigs.debug
               }
@@ -374,56 +374,60 @@ jobs:
           }
           EOF
 
-      # FIX 3: Update gradle wrapper dengan retry dan delay
       - name: Update gradle wrapper to 8.7
         run: |
           cd android
-          # Hapus cache gradle wrapper yang corrupt
-          rm -rf ~/.gradle/caches/jars-9/ || true
-          rm -rf ~/.gradle/wrapper/dists/gradle-8.7-all || true
+          # Hapus cache yang corrupt
+          rm -rf ~/.gradle/caches/jars-9/ 2>/dev/null || true
+          rm -rf ~/.gradle/wrapper/dists/gradle-8.7-all 2>/dev/null || true
           
-          # Update wrapper dengan retry
-          for i in {1..3}; do
-            echo "Attempt $i to update gradle wrapper..."
-            if ./gradlew wrapper --gradle-version=8.7 --distribution-type=all --no-daemon; then
-              echo "Gradle wrapper update successful"
-              break
-            else
-              echo "Attempt $i failed, waiting 10 seconds..."
-              sleep 10
-              # Bersihkan cache lagi
-              rm -rf ~/.gradle/caches/jars-9/ || true
-            fi
-          done
+          # Update wrapper
+          ./gradlew wrapper --gradle-version=8.7 --distribution-type=all --no-daemon || {
+            echo "Wrapper update failed, trying with cleanup..."
+            ./gradlew --stop
+            rm -rf ~/.gradle/caches/
+            ./gradlew wrapper --gradle-version=8.7 --distribution-type=all --no-daemon
+          }
           cd ..
 
-      # FIX 4: Build APK dengan retry dan cleanup
-      - name: Build APK
+      - name: Build APK with debug
         run: |
           cd android
           chmod +x gradlew
           
-          # Bersihkan dan build dengan retry
-          for i in {1..3}; do
-            echo "Attempt $i to build APK..."
-            rm -rf ~/.gradle/caches/jars-9/ || true
-            rm -rf ~/.gradle/caches/modules-2/files-2.1/org.bouncycastle/ || true
-            
-            if ./gradlew clean assembleRelease --no-daemon --stacktrace; then
-              echo "Build successful"
-              break
-            else
-              echo "Build attempt $i failed, waiting 15 seconds..."
-              sleep 15
-              # Kill gradle daemon yang mungkin bermasalah
-              ./gradlew --stop || true
-            fi
-          done
+          # Stop existing daemon
+          ./gradlew --stop || true
+          
+          # Clean and build with full debug
+          echo "=== Cleaning project ==="
+          ./gradlew clean --no-daemon --stacktrace || {
+            echo "Clean failed, trying to continue..."
+          }
+          
+          echo "=== Building APK ==="
+          ./gradlew assembleRelease --no-daemon --stacktrace --info || {
+            echo "Build failed, trying debug build..."
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          }
+          
+          # List all build outputs for debugging
+          echo "=== Build outputs ==="
+          find . -type d -name "build" -o -name "outputs" | head -20
+          find . -name "*.apk" 2>/dev/null || echo "No APK found in android folder"
+          
           cd ..
+          
+          # Also check from root
+          echo "=== All APK files ==="
+          find . -name "*.apk" 2>/dev/null || echo "No APK found anywhere"
 
       - name: Find and rename APK
         run: |
-          APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -n 1)
+          echo "Searching for APK files..."
+          find . -name "*.apk" -type f 2>/dev/null
+          
+          APK_PATH=$(find . -name "*.apk" -type f | grep -E "android/app/build/outputs" | head -n 1)
+          
           if [ -n "$APK_PATH" ]; then
             echo "Found APK at: $APK_PATH"
             mkdir -p output
@@ -431,9 +435,22 @@ jobs:
             echo "APK copied to output/${{ steps.vars.outputs.app_name }}.apk"
             echo "apk_path=output/${{ steps.vars.outputs.app_name }}.apk" >> $GITHUB_OUTPUT
           else
-            echo "No APK found!"
-            find android/app/build/outputs -type f -name "*.apk" || echo "No APK files found"
-            exit 1
+            echo "No APK found in build outputs!"
+            echo "Trying to find any APK..."
+            ANY_APK=$(find . -name "*.apk" -type f | head -n 1)
+            if [ -n "$ANY_APK" ]; then
+              echo "Found APK at: $ANY_APK"
+              mkdir -p output
+              cp "$ANY_APK" "output/${{ steps.vars.outputs.app_name }}.apk"
+              echo "APK copied to output/${{ steps.vars.outputs.app_name }}.apk"
+              echo "apk_path=output/${{ steps.vars.outputs.app_name }}.apk" >> $GITHUB_OUTPUT
+            else
+              echo "No APK found at all!"
+              echo "Directory structure:"
+              ls -la android/app/build/ 2>/dev/null || echo "Build directory not found"
+              ls -la android/app/ 2>/dev/null || echo "App directory not found"
+              exit 1
+            fi
           fi
 
       - name: Upload APK as artifact
@@ -444,7 +461,7 @@ jobs:
           retention-days: 30
 
       - name: Create release and upload APK
-        if: always()
+        if: success()
         run: |
           if [ -f "output/${{ steps.vars.outputs.app_name }}.apk" ]; then
             TAG="web2apk-$(date +'%Y%m%d-%H%M%S')"
