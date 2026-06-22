@@ -60,8 +60,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          # HAPUS CACHE - INI YANG BIKIN ERROR!
-          # cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -76,14 +74,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install tanpa cache
           npm install -g cordova@latest
           npm install -g cordova-res@latest
-          npm install -g cordova-android@latest
-          
-          # Verifikasi install
-          cordova --version
           echo "✅ Dependencies installed"
+          cordova --version
 
       - name: Validate inputs
         id: validate
@@ -94,53 +88,59 @@ jobs:
             exit 1
           fi
           
-          # Validasi format URL
           if [[ ! "${{ env.WEB_URL }}" =~ ^https?:// ]]; then
             echo "❌ ERROR: URL harus diawali dengan http:// atau https://"
             exit 1
           fi
           
-          # Validasi nama aplikasi
           if [[ -z "${{ env.APP_NAME }}" ]]; then
             echo "❌ ERROR: Nama aplikasi tidak boleh kosong"
             exit 1
           fi
           
-          # Buat App ID jika tidak disediakan
+          # Buat App ID
           if [[ -z "${{ env.APP_ID }}" ]]; then
-            APP_ID="com.webapp.$(echo "${{ env.APP_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g' | cut -c1-20)"
+            APP_ID_CLEAN=$(echo "${{ env.APP_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g' | cut -c1-15)
+            APP_ID="com.webapp.${APP_ID_CLEAN}"
             echo "APP_ID=$APP_ID" >> $GITHUB_ENV
-            echo "✅ App ID otomatis: $APP_ID"
+            echo "✅ App ID: $APP_ID"
           else
             echo "✅ App ID: ${{ env.APP_ID }}"
           fi
-          
-          echo "✅ Validasi berhasil"
 
-      - name: Create Cordova project
+      - name: Create Cordova project with proper structure
         run: |
           APP_ID_FIXED="${APP_ID:-com.webapp.myapp}"
+          APP_NAME_FIXED="${{ env.APP_NAME }}"
           
-          # Buat project
-          cordova create app "$APP_ID_FIXED" "${{ env.APP_NAME }}"
+          echo "📱 Creating Cordova project: $APP_NAME_FIXED ($APP_ID_FIXED)"
+          
+          # Buat project dengan cara yang benar
+          npx cordova create app "$APP_ID_FIXED" "$APP_NAME_FIXED"
           
           cd app
           
-          # Tambahkan platform Android
-          cordova platform add android@latest
+          # Hapus platform lama jika ada
+          rm -rf platforms plugins
           
-          # Setup config.xml
-          cat > config.xml << 'EOF'
+          # Tambahkan platform Android dengan versi spesifik
+          cordova platform add android@12.0.0
+          
+          # Setup config.xml yang benar
+          cat > config.xml << EOF
           <?xml version='1.0' encoding='utf-8'?>
           <widget id="$APP_ID_FIXED" version="${{ env.VERSION }}" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
-              <name>${{ env.APP_NAME }}</name>
-              <description>Web App ${{ env.APP_NAME }}</description>
+              <name>$APP_NAME_FIXED</name>
+              <description>$APP_NAME_FIXED Web App</description>
               <author email="build@example.com" href="${{ env.WEB_URL }}">Build Team</author>
               <content src="${{ env.WEB_URL }}" />
+              
               <access origin="*" />
               <allow-intent href="http://*/*" />
               <allow-intent href="https://*/*" />
               <allow-navigation href="*" />
+              <allow-navigation href="${{ env.WEB_URL }}" />
+              
               <preference name="Orientation" value="${{ env.ORIENTATION }}" />
               <preference name="Fullscreen" value="false" />
               <preference name="StatusBarOverlaysWebView" value="false" />
@@ -149,102 +149,136 @@ jobs:
               <preference name="android-targetSdkVersion" value="34" />
               <preference name="android-compileSdkVersion" value="34" />
               <preference name="android-buildToolsVersion" value="34.0.0" />
+              
+              <platform name="android">
+                  <preference name="AndroidXEnabled" value="true" />
+                  <preference name="GradlePluginKotlinEnabled" value="true" />
+              </platform>
           </widget>
           EOF
           
-          # Buat file index.html minimal
+          # Buat MainActivity.java yang benar
+          mkdir -p platforms/android/app/src/main/java/com/example/app/
+          cat > platforms/android/app/src/main/java/com/example/app/MainActivity.java << 'EOF'
+          package com.example.app;
+          
+          import android.os.Bundle;
+          import org.apache.cordova.*;
+          
+          public class MainActivity extends CordovaActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  loadUrl(launchUrl);
+              }
+          }
+          EOF
+          
+          # Setup www/index.html
           mkdir -p www
-          cat > www/index.html << 'EOF'
+          cat > www/index.html << EOF
           <!DOCTYPE html>
           <html>
           <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-              <title>${{ env.APP_NAME }}</title>
+              <title>$APP_NAME_FIXED</title>
               <style>
-                  * { margin:0; padding:0; }
-                  body { overflow:hidden; background:#000; }
-                  iframe { 
-                      width:100vw; 
-                      height:100vh; 
-                      border:none; 
+                  * { margin:0; padding:0; box-sizing:border-box; }
+                  html, body { 
+                      width:100%; 
+                      height:100%; 
+                      overflow:hidden; 
+                      background:#000;
+                      margin:0;
+                      padding:0;
+                  }
+                  #webview {
+                      width:100vw;
+                      height:100vh;
+                      border:none;
                       position:fixed;
                       top:0;
                       left:0;
+                      background:#fff;
+                  }
+                  .loading {
+                      position:fixed;
+                      top:50%;
+                      left:50%;
+                      transform:translate(-50%,-50%);
+                      color:#fff;
+                      font-family:Arial;
+                      font-size:16px;
+                      z-index:999;
                   }
               </style>
           </head>
           <body>
-              <iframe src="${{ env.WEB_URL }}" allow="geolocation; microphone; camera; payment; autoplay"></iframe>
+              <div class="loading">Loading...</div>
+              <iframe id="webview" src="${{ env.WEB_URL }}" allow="geolocation; microphone; camera; payment; autoplay"></iframe>
               <script>
-                  window.addEventListener('online', () => {
-                      document.querySelector('iframe').src = '${{ env.WEB_URL }}';
+                  document.getElementById('webview').addEventListener('load', function() {
+                      document.querySelector('.loading').style.display = 'none';
                   });
-                  // Handle error
-                  window.addEventListener('error', function(e) {
-                      console.log('WebView error:', e.message);
+                  
+                  document.getElementById('webview').addEventListener('error', function() {
+                      document.querySelector('.loading').textContent = 'Error loading page';
                   });
               </script>
           </body>
           </html>
           EOF
           
-          echo "✅ Cordova project created"
+          echo "✅ Cordova project created with proper structure"
 
       - name: Download and set icon
         if: env.ICON_URL != ''
         run: |
           cd app
           
-          # Install ImageMagick untuk resize
           sudo apt-get update
           sudo apt-get install -y imagemagick
           
           mkdir -p res/icon/android
           
-          echo "📥 Downloading icon from: ${{ env.ICON_URL }}"
-          
-          # Download dengan timeout
+          echo "📥 Downloading icon..."
           curl -L --max-time 30 "${{ env.ICON_URL }}" -o icon.png || echo "⚠️ Gagal download"
           
-          if [[ -f icon.png ]]; then
+          if [[ -f icon.png && $(file icon.png | grep -i image) ]]; then
             # Resize untuk berbagai ukuran
             for size in 512 192 144 96 72 48 36; do
-              convert icon.png -resize ${size}x${size} -background transparent -gravity center -extent ${size}x${size} res/icon/android/icon-${size}.png 2>/dev/null || echo "⚠️ Gagal resize $size"
+              convert icon.png -resize ${size}x${size} -background transparent -gravity center -extent ${size}x${size} res/icon/android/icon-${size}.png 2>/dev/null || true
             done
-            
             echo "✅ Icon berhasil di-set"
           else
-            echo "⚠️ Icon tidak ditemukan, menggunakan default"
+            echo "⚠️ Icon tidak valid, menggunakan default"
           fi
 
-      - name: Build Android APK
+      - name: Build Android APK with proper gradle
         run: |
           cd app
           
+          echo "🔨 Building Android APK..."
+          
           # Generate debug keystore
-          keytool -genkey -v -keystore ../debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US" 2>/dev/null || true
+          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US" 2>/dev/null || true
           
-          # Build release
-          echo "🔨 Building release APK..."
-          cordova build android --release -- --keystore=../debug.keystore --alias=androiddebugkey --storepass=android --keypass=android || true
-          
-          # Jika build release gagal, coba debug
-          if [[ ! -f platforms/android/app/build/outputs/apk/release/app-release.apk ]]; then
-            echo "⚠️ Build release gagal, mencoba debug..."
-            cordova build android --debug
-          fi
+          # Build with gradle directly
+          echo "📦 Building with Cordova..."
+          cordova build android --debug --verbose
           
           # Cek hasil build
-          echo "📦 Checking build results..."
-          find . -name "*.apk" -type f || echo "⚠️ No APK found"
+          echo "📁 Checking build results..."
+          find . -name "*.apk" -type f -exec ls -lh {} \;
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: webapk-${{ env.APP_NAME }}-${{ github.run_number }}
           path: |
-            app/platforms/android/app/build/outputs/apk/**/*.apk
+            app/platforms/android/app/build/outputs/apk/debug/*.apk
+            app/platforms/android/app/build/outputs/apk/release/*.apk
           retention-days: 30
 
       - name: Create release
@@ -258,7 +292,8 @@ jobs:
           prerelease: false
           generate_release_notes: false
           files: |
-            app/platforms/android/app/build/outputs/apk/**/*.apk
+            app/platforms/android/app/build/outputs/apk/debug/*.apk
+            app/platforms/android/app/build/outputs/apk/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -266,32 +301,31 @@ jobs:
         if: always()
         run: |
           echo "📁 Directory structure:"
-          ls -la app/platforms/android/app/build/outputs/apk/ 2>/dev/null || echo "⚠️ No APK directory"
-          find . -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || echo "⚠️ No APK files found"
+          ls -la app/ 2>/dev/null || echo "⚠️ No app directory"
+          ls -la app/platforms/ 2>/dev/null || echo "⚠️ No platforms directory"
+          ls -la app/platforms/android/ 2>/dev/null || echo "⚠️ No android directory"
+          find . -name "*.apk" -type f 2>/dev/null || echo "⚠️ No APK files"
 
-      - name: Send success notification
+      - name: Success notification
         if: success()
         run: |
-          echo "✅ Web2APK build berhasil!"
+          echo "✅ Web2APK build BERHASIL!"
           echo "📱 App: ${{ env.APP_NAME }}"
           echo "🌐 URL: ${{ env.WEB_URL }}"
-          echo "📦 Release: ${{ steps.create_release.outputs.url }}"
+          echo "📦 Download: https://github.com/${{ github.repository }}/releases/tag/web2apk-${{ env.APP_NAME }}-${{ github.run_number }}"
 
-      - name: Send failure notification
+      - name: Failure notification
         if: failure()
         run: |
-          echo "❌ Web2APK build gagal!"
+          echo "❌ Web2APK build GAGAL!"
           echo "📱 App: ${{ env.APP_NAME }}"
           echo "🌐 URL: ${{ env.WEB_URL }}"
-          echo "🔍 Periksa logs di atas untuk detail error"
-          
-          # Tampilkan error log
-          echo "📋 Last 50 lines of build log:"
-          tail -50 /home/runner/.npm/_logs/*-debug.log 2>/dev/null || echo "No npm logs"
+          echo ""
+          echo "📋 Error log:"
+          cat /home/runner/.npm/_logs/*-debug.log 2>/dev/null | tail -20 || echo "No npm logs"
 
       - name: Cleanup
         if: always()
         run: |
-          cd app 2>/dev/null && cordova clean 2>/dev/null || true
           rm -rf app 2>/dev/null || true
           echo "🧹 Cleanup selesai"
