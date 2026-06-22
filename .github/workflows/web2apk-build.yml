@@ -1,74 +1,320 @@
-name: Web2APK Build
+# web2apk-build.yml
+name: Build Web to APK (PWA2APK)
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: "URL Website"
+        description: 'URL Website (harus HTTPS)'
         required: true
         type: string
-
+        default: 'https://example.com'
       app_name:
-        description: "Nama APK"
+        description: 'Nama Aplikasi'
         required: true
         type: string
-
+        default: 'MyWebApp'
       icon_url:
-        description: "URL Icon APK"
+        description: 'URL Icon (512x512 PNG)'
         required: false
         type: string
+        default: ''
 
+permissions:
+  contents: write
+  actions: write
+  checks: write
 
 jobs:
-  build:
+  build-web2apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
+    
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '18'
 
-
-      - name: Install Tools
+      - name: Install PWA2APK
         run: |
-          sudo apt update
-          sudo apt install -y zip unzip wget
+          npm install -g pwa2apk@latest
+          pwa2apk --version
 
-
-      - name: Download Android Template
+      - name: Create Android Manifest
         run: |
-          git clone https://github.com/GunzKapotited/android-templete.git android-template || true
+          mkdir -p android/app/src/main
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.${{ github.event.inputs.app_name }}.app">
+              
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="${{ github.event.inputs.app_name }}"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+                  android:usesCleartextTraffic="true">
+                  
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|keyboardHidden|screenSize"
+                      android:exported="true"
+                      android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
 
-
-      - name: Prepare Project
+      - name: Create WebView Activity
         run: |
-          cd android-template
+          mkdir -p android/app/src/main/java/com/${{ github.event.inputs.app_name }}/app
+          cat > android/app/src/main/java/com/${{ github.event.inputs.app_name }}/app/MainActivity.java << 'EOF'
+          package com.${{ github.event.inputs.app_name }}.app;
+          
+          import android.os.Bundle;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebChromeClient;
+          import androidx.appcompat.app.AppCompatActivity;
+          
+          public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+              
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_main);
+                  
+                  webView = findViewById(R.id.webView);
+                  WebSettings webSettings = webView.getSettings();
+                  webSettings.setJavaScriptEnabled(true);
+                  webSettings.setDomStorageEnabled(true);
+                  webSettings.setLoadWithOverviewMode(true);
+                  webSettings.setUseWideViewPort(true);
+                  
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                          view.loadUrl(url);
+                          return true;
+                      }
+                  });
+                  
+                  webView.setWebChromeClient(new WebChromeClient());
+                  
+                  String url = getIntent().getStringExtra("url");
+                  if (url == null || url.isEmpty()) {
+                      url = "${{ github.event.inputs.web_url }}";
+                  }
+                  webView.loadUrl(url);
+              }
+              
+              @Override
+              public void onBackPressed() {
+                  if (webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
 
-          sed -i "s|APP_NAME_HERE|${{ inputs.app_name }}|g" ./* 2>/dev/null || true
-          sed -i "s|WEB_URL_HERE|${{ inputs.web_url }}|g" ./* 2>/dev/null || true
+      - name: Create Layout
+        run: |
+          mkdir -p android/app/src/main/res/layout
+          cat > android/app/src/main/res/layout/activity_main.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical">
+              
+              <WebView
+                  android:id="@+id/webView"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent" />
+          </LinearLayout>
+          EOF
 
-          if [ ! -z "${{ inputs.icon_url }}" ]; then
-            wget "${{ inputs.icon_url }}" -O app_icon.png || true
-          fi
+      - name: Create Gradle Files
+        run: |
+          mkdir -p android/app
+          cat > android/app/build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          
+          android {
+              compileSdk 34
+              
+              defaultConfig {
+                  applicationId "com.${{ github.event.inputs.app_name }}.app"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              
+              buildTypes {
+                  release {
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+              }
+          }
+          
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'androidx.webkit:webkit:1.9.0'
+          }
+          EOF
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        run: |
+          mkdir -p android/gradle/wrapper
+          curl -L https://services.gradle.org/distributions/gradle-8.4-bin.zip -o gradle.zip
+          unzip gradle.zip -d /opt/
+          echo "GRADLE_HOME=/opt/gradle-8.4" >> $GITHUB_ENV
+          export PATH=$PATH:/opt/gradle-8.4/bin
+          
+          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+      - name: Create Project Structure
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          
+          # Create dummy icons (will be replaced by user icon if provided)
+          echo "Creating dummy icons..."
+          for size in 72 48 96 144 192; do
+            convert -size ${size}x${size} xc:blue android/app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || echo "ImageMagick not installed"
+          done
+
+      - name: Download Custom Icon
+        if: github.event.inputs.icon_url != ''
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          
+          curl -L "${{ github.event.inputs.icon_url }}" -o icon.png
+          
+          # Convert to different sizes
+          convert icon.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          # Create round icons
+          cp android/app/src/main/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+
+      - name: Create Settings Gradle
+        run: |
+          cat > android/settings.gradle << 'EOF'
+          rootProject.name = "${{ github.event.inputs.app_name }}"
+          include ':app'
+          EOF
+
+      - name: Create Build Gradle
+        run: |
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.0'
+              }
+          }
+          
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
 
       - name: Build APK
         run: |
-          cd android-template
-
+          cd android
           chmod +x gradlew
-
           ./gradlew assembleRelease
-
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.app_name }}-apk
-          path: android-template/app/build/outputs/apk/release/*.apk
+          name: web2apk-${{ github.event.inputs.app_name }}
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 7
+
+      - name: Upload to Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: web2apk-${{ github.run_number }}
+          name: "Web2APK - ${{ github.event.inputs.app_name }}"
+          files: android/app/build/outputs/apk/release/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to GitHub Pages
+        if: success()
+        run: |
+          mkdir -p deploy
+          cp android/app/build/outputs/apk/release/*.apk deploy/
+          echo "APK built successfully!" > deploy/index.html
+          echo "<h1>${{ github.event.inputs.app_name }}</h1>" >> deploy/index.html
+          echo "<p>APK ready for download</p>" >> deploy/index.html
+          echo "<a href='$(ls *.apk)' download>Download APK</a>" >> deploy/index.html
+          
+      - name: Deploy to GitHub Pages
+        if: success()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./deploy
+          destination_dir: web2apk-${{ github.run_number }}
+          keep_files: true
+
+      - name: Download APK (for debugging)
+        if: success()
+        run: |
+          echo "APK built successfully!"
+          ls -la android/app/build/outputs/apk/release/
