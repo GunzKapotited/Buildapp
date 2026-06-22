@@ -42,7 +42,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install -g @bubblewrap/cli
+          npm install -g pwabuilder
           sudo apt-get update
           sudo apt-get install -y imagemagick wget unzip jq
 
@@ -100,7 +100,7 @@ jobs:
           echo "✅ Icon ready"
           file icon.png
 
-      - name: Generate APK using Bubblewrap
+      - name: Generate APK
         id: generate_apk
         run: |
           echo "🔨 Generating APK..."
@@ -125,31 +125,16 @@ jobs:
           }
           EOF
           
-          # INIT - pake yes untuk auto answer
-          echo "🔄 Initializing Bubblewrap..."
-          yes | npx @bubblewrap/cli init --manifest manifest.json || {
-            echo "⚠️ Init failed, trying with --skip..."
-            npx @bubblewrap/cli init --manifest manifest.json --skip
-          }
+          pwabuilder build --manifest manifest.json --platform android --output ./output
           
-          # BUILD
-          echo "🔄 Building APK..."
-          npx @bubblewrap/cli build || {
-            echo "⚠️ Build failed, trying with --skip..."
-            npx @bubblewrap/cli build --skip
-          }
+          APK_PATH=$(find ./output -name "*.apk" -type f | head -1)
           
-          # APK hasilnya di root: app-release.apk
-          if [ -f "app-release.apk" ]; then
-            echo "✅ APK found: app-release.apk"
-            mkdir -p output
-            cp app-release.apk ./output/app-release.apk
-            echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
+          if [ -n "$APK_PATH" ]; then
+            echo "✅ APK found: $APK_PATH"
+            echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
           else
             echo "❌ No APK found"
-            echo "📂 Directory contents:"
-            ls -la
-            find . -name "*.apk" 2>/dev/null || echo "No APK files"
+            ls -la ./output/
             exit 1
           fi
 
