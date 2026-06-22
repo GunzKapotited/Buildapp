@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       icon_url:
-        description: 'URL Icon (PNG/JPG)'
+        description: 'URL Icon (PNG/JPG) - Bisa URL file langsung atau URL release'
         required: true
         type: string
 
@@ -30,8 +30,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          # HAPUS cache! Karena ga ada package-lock.json
-          # cache: 'npm'  ← HAPUS INI!
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -44,37 +42,141 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install PWABuilder (global, no package.json needed)
           npm install -g pwabuilder
-          
-          # Install ImageMagick
           sudo apt-get update
           sudo apt-get install -y imagemagick wget unzip jq
-          
-          # Verify
           pwabuilder --version || echo "PWABuilder installed"
 
       - name: Download and prepare icon
         run: |
           echo "⬇️ Downloading icon from: ${{ inputs.icon_url }}"
           
-          # Download icon
-          curl -L -o icon.png "${{ inputs.icon_url }}" || {
-            echo "⚠️ Failed to download, using placeholder"
-            curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=${{ inputs.app_name }}"
+          ICON_URL="${{ inputs.icon_url }}"
+          
+          # ============================================
+          # FUNCTION: Get actual icon URL from release
+          # ============================================
+          get_icon_from_release() {
+            local url="$1"
+            
+            # Extract tag from URL
+            local TAG=$(echo "$url" | sed 's/.*\/tag\///' | sed 's/?.*//')
+            echo "📌 Extracted tag: $TAG"
+            
+            # Get release info via GitHub API
+            local RELEASE_INFO=$(curl -s \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
+            
+            # Find icon asset (png/jpg/jpeg)
+            local ICON_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | test("icon|png|jpg|jpeg"; "i")) | .browser_download_url' | head -1)
+            
+            if [ -n "$ICON_URL" ] && [ "$ICON_URL" != "null" ]; then
+              echo "$ICON_URL"
+              return 0
+            fi
+            
+            # If no icon, try any asset
+            local ANY_ASSET=$(echo "$RELEASE_INFO" | jq -r '.assets[0].browser_download_url' 2>/dev/null)
+            if [ -n "$ANY_ASSET" ] && [ "$ANY_ASSET" != "null" ]; then
+              echo "$ANY_ASSET"
+              return 0
+            fi
+            
+            return 1
           }
           
-          # Check if valid image
+          # ============================================
+          # Check if URL is a release tag URL
+          # ============================================
+          if echo "$ICON_URL" | grep -q "/releases/tag/"; then
+            echo "🔄 Detected release URL, extracting actual file URL..."
+            
+            ACTUAL_URL=$(get_icon_from_release "$ICON_URL")
+            
+            if [ -n "$ACTUAL_URL" ] && [ "$ACTUAL_URL" != "null" ]; then
+              ICON_URL="$ACTUAL_URL"
+              echo "✅ Found asset URL: $ICON_URL"
+            else
+              echo "❌ No asset found in release"
+              echo "🔄 Creating default icon using ImageMagick..."
+              
+              # Create default icon with ImageMagick
+              convert -size 512x512 xc:transparent \
+                -fill black -gravity center \
+                -font Helvetica -pointsize 80 \
+                -annotate +0+0 "${{ inputs.app_name }}" \
+                icon.png || {
+                  echo "❌ ImageMagick failed, creating empty PNG"
+                  echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
+                }
+              
+              echo "✅ Default icon created"
+              ls -la icon.png
+              exit 0
+            fi
+          fi
+          
+          # ============================================
+          # Download the icon
+          # ============================================
+          echo "⬇️ Downloading from: $ICON_URL"
+          
+          # Try download with retry
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+            if curl -L -o icon.png "$ICON_URL" --fail --connect-timeout 10; then
+              echo "✅ Download successful"
+              break
+            else
+              echo "⚠️ Download attempt $i failed"
+              if [ $i -eq 3 ]; then
+                echo "❌ All download attempts failed"
+                echo "🔄 Creating default icon..."
+                convert -size 512x512 xc:transparent \
+                  -fill black -gravity center \
+                  -font Helvetica -pointsize 80 \
+                  -annotate +0+0 "${{ inputs.app_name }}" \
+                  icon.png || {
+                    # Fallback: create 1x1 transparent PNG
+                    echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > icon.png
+                  }
+                echo "✅ Default icon created"
+              fi
+              sleep 2
+            fi
+          done
+          
+          # ============================================
+          # Validate and fix icon
+          # ============================================
+          if [ ! -f "icon.png" ]; then
+            echo "❌ No icon file, creating default..."
+            convert -size 512x512 xc:transparent \
+              -fill black -gravity center \
+              -font Helvetica -pointsize 80 \
+              -annotate +0+0 "${{ inputs.app_name }}" \
+              icon.png
+          fi
+          
+          # Check if file is valid image
           if ! file icon.png | grep -q "PNG image\|JPEG image"; then
-            echo "⚠️ Not a valid image, using placeholder"
-            curl -L -o icon.png "https://via.placeholder.com/512x512/000000/FFFFFF?text=${{ inputs.app_name }}"
+            echo "⚠️ File is not a valid image, creating default..."
+            convert -size 512x512 xc:transparent \
+              -fill black -gravity center \
+              -font Helvetica -pointsize 80 \
+              -annotate +0+0 "${{ inputs.app_name }}" \
+              icon.png
           fi
           
           # Create icons directory
           mkdir -p icons
           cp icon.png icons/icon.png
           
-          echo "✅ Icon ready"
+          echo "✅ Icon ready:"
+          file icon.png
+          ls -la icon.png
 
       - name: Generate APK using PWABuilder
         id: generate_apk
@@ -112,7 +214,8 @@ jobs:
             --output ./output || {
               echo "⚠️ PWABuilder failed, trying alternative..."
               
-              # Alternative: Use pwa2apk from GitHub
+              # Alternative: Use simple webview wrapper
+              echo "🔄 Using pwa2apk from GitHub..."
               git clone https://github.com/toly1994328/pwa2apk.git
               cd pwa2apk
               npm install
@@ -134,6 +237,8 @@ jobs:
             echo "apk_path=./output/app-release.apk" >> $GITHUB_OUTPUT
           else
             echo "❌ No APK found"
+            echo "📂 Directory contents:"
+            find . -type f 2>/dev/null | head -20
             exit 1
           fi
 
@@ -158,3 +263,22 @@ jobs:
           path: ${{ steps.generate_apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 7
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Web to APK Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App Name | ${{ inputs.app_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web URL | ${{ inputs.web_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ APK generated successfully!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Build failed!" >> $GITHUB_STEP_SUMMARY
+          fi
