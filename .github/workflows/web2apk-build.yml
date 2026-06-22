@@ -354,18 +354,21 @@ jobs:
           }
           EOF
 
-      - name: Replace Gradle version
+      - name: Clean Gradle cache and build with fresh install
         run: |
-          cd android
-          sed -i 's/gradle-8.2.1-all.zip/gradle-7.6.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
-          cd ..
-
-      - name: Build APK with Gradle
-        run: |
+          # Hapus semua cache
+          rm -rf ~/.gradle/caches/
+          rm -rf ~/.gradle/wrapper/
+          
           cd android
           chmod +x gradlew
-          ./gradlew clean
-          ./gradlew assembleRelease --no-daemon
+          
+          # Force download ulang wrapper
+          ./gradlew wrapper --gradle-version=8.2.1 --distribution-type=all
+          
+          # Build
+          ./gradlew clean --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
           cd ..
 
       - name: Find and rename APK
