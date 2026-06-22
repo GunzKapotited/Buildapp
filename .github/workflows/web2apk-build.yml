@@ -1,118 +1,503 @@
-name: Web to APK Builder
+name: Web to APK Build
 
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: 'URL Website'
+        description: 'URL website yang akan dijadikan APK'
         required: true
         type: string
+        default: 'https://example.com'
       app_name:
         description: 'Nama Aplikasi'
         required: true
         type: string
+        default: 'MyWebApp'
       icon_url:
-        description: 'URL Icon (PNG/JPG) atau URL Release'
-        required: true
+        description: 'URL Icon (PNG, minimal 512x512)'
+        required: false
         type: string
+        default: 'https://raw.githubusercontent.com/GunzKapotited/Buildapp/main/icon.png'
+      package_name:
+        description: 'Package Name (com.example.app)'
+        required: false
+        type: string
+        default: 'com.webapp.myapp'
+      orientation:
+        description: 'Orientasi Layar'
+        required: false
+        type: choice
+        default: 'default'
+        options:
+          - default
+          - portrait
+          - landscape
+      display_mode:
+        description: 'Mode Tampilan'
+        required: false
+        type: choice
+        default: 'standalone'
+        options:
+          - standalone
+          - fullscreen
+          - minimal-ui
+          - browser
 
 jobs:
-  build:
+  build-web2apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          distribution: 'zulu'
-          java-version: '17'
-      
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+          node-version: '18'
+          cache: 'npm'
 
       - name: Install dependencies
         run: |
+          npm install -g pwa2apk
+          npm install -g cordova-res
+          npm install -g @capacitor/cli
+          npm install -g @capacitor/android
+
+      - name: Install Android SDK dependencies
+        run: |
           sudo apt-get update
-          sudo apt-get install -y curl imagemagick zip jq wget unzip nodejs npm
+          sudo apt-get install -y \
+            openjdk-17-jdk \
+            android-sdk \
+            gradle \
+            wget \
+            unzip
 
-      - name: Get icon
+      - name: Setup Android SDK
         run: |
-          ICON_URL="${{ inputs.icon_url }}"
+          export ANDROID_SDK_ROOT=/usr/lib/android-sdk
+          export PATH=$PATH:$ANDROID_SDK_ROOT/tools:$ANDROID_SDK_ROOT/platform-tools
+          echo "ANDROID_SDK_ROOT=/usr/lib/android-sdk" >> $GITHUB_ENV
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "PATH=$PATH:/usr/lib/android-sdk/tools:/usr/lib/android-sdk/platform-tools" >> $GITHUB_ENV
           
-          echo "🔍 Processing icon URL: $ICON_URL"
+          # Accept Android licenses
+          yes | sudo /usr/lib/android-sdk/tools/bin/sdkmanager --licenses || true
           
-          if echo "$ICON_URL" | grep -q "/releases/tag/"; then
-            echo "📌 Release URL detected, extracting image..."
-            
-            TAG=$(echo "$ICON_URL" | sed 's/.*\/tag\///' | sed 's/?.*//')
-            echo "📌 Tag: $TAG"
-            
-            RELEASE_DATA=$(curl -s \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}")
-            
-            IMAGE_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name | test("\\.(png|jpg|jpeg|ico)$"; "i")) | .browser_download_url' | head -1)
-            
-            if [ -n "$IMAGE_URL" ] && [ "$IMAGE_URL" != "null" ]; then
-              echo "✅ Found image: $IMAGE_URL"
-              curl -L -o icon.png "$IMAGE_URL"
-            else
-              echo "❌ No image found, creating default..."
-              convert -size 512x512 xc:black -fill white -gravity center \
-                -font Helvetica -pointsize 60 -annotate +0+0 "${{ inputs.app_name }}" \
-                icon.png
-            fi
-          else
-            curl -L -o icon.png "$ICON_URL"
-          fi
-          
-          if [ ! -f "icon.png" ] || ! file icon.png | grep -q "PNG image\|JPEG image"; then
-            echo "⚠️ Invalid image, creating default..."
-            convert -size 512x512 xc:black -fill white -gravity center \
-              -font Helvetica -pointsize 60 -annotate +0+0 "${{ inputs.app_name }}" \
-              icon.png
-          fi
-          
-          convert icon.png -resize 512x512 -background transparent -gravity center -extent 512x512 icon.png
-          
-          echo "✅ Icon ready"
-          file icon.png
+          # Install required Android packages
+          sudo /usr/lib/android-sdk/tools/bin/sdkmanager \
+            "platforms;android-33" \
+            "build-tools;33.0.0" \
+            "platform-tools" \
+            "tools" || true
 
-      - name: Build APK with PWABuilder CLI
+      - name: Create PWA2APK config
         run: |
-          # Create manifest
-          cat > manifest.json << EOF
+          cat > pwa2apk-config.json << EOF
           {
-            "name": "${{ inputs.app_name }}",
-            "short_name": "${{ inputs.app_name }}",
-            "start_url": "${{ inputs.web_url }}",
-            "display": "standalone",
+            "name": "${{ github.event.inputs.app_name }}",
+            "short_name": "${{ github.event.inputs.app_name }}",
+            "start_url": "${{ github.event.inputs.web_url }}",
+            "display": "${{ github.event.inputs.display_mode }}",
+            "orientation": "${{ github.event.inputs.orientation }}",
             "background_color": "#ffffff",
-            "theme_color": "#000000",
+            "theme_color": "#1976d2",
             "icons": [
               {
-                "src": "icon.png",
+                "src": "${{ github.event.inputs.icon_url }}",
                 "sizes": "512x512",
-                "type": "image/png"
+                "type": "image/png",
+                "purpose": "any maskable"
               }
             ]
           }
           EOF
           
-          # Install PWABuilder CLI dari npm
-          npm install -g @pwabuilder/cli
-          
-          # Build
-          pwabuilder build --manifest manifest.json --platform android --output ./output
+          cat pwa2apk-config.json
 
-      - name: Upload APK
+      - name: Create Capacitor config
+        run: |
+          cat > capacitor.config.json << EOF
+          {
+            "appId": "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}",
+            "appName": "${{ github.event.inputs.app_name }}",
+            "webDir": "www",
+            "server": {
+              "url": "${{ github.event.inputs.web_url }}",
+              "cleartext": true,
+              "androidScheme": "https"
+            },
+            "android": {
+              "allowMixedContent": true,
+              "captureInput": true,
+              "webContentsDebuggingEnabled": true
+            },
+            "plugins": {
+              "SplashScreen": {
+                "launchShowDuration": 2000,
+                "launchAutoHide": true,
+                "backgroundColor": "#ffffff",
+                "androidSplashResourceName": "splash",
+                "androidScaleType": "CENTER_CROP",
+                "showSpinner": false,
+                "androidSpinnerStyle": "large",
+                "iosSpinnerStyle": "small",
+                "spinnerColor": "#999999",
+                "splashFullScreen": true,
+                "splashImmersive": true,
+                "layoutName": "launch_screen",
+                "useDialog": false
+              }
+            }
+          }
+          EOF
+          
+          cat capacitor.config.json
+
+      - name: Download icon
+        run: |
+          mkdir -p www
+          if [ -n "${{ github.event.inputs.icon_url }}" ]; then
+            wget -O www/icon.png "${{ github.event.inputs.icon_url }}" || echo "Icon download failed, using default"
+          fi
+          
+          # Create default icon if download failed
+          if [ ! -f www/icon.png ]; then
+            echo "Creating default icon..."
+            convert -size 512x512 xc:#1976d2 -font DejaVu-Sans -pointsize 120 -fill white \
+              -gravity center -annotate 0 "${{ github.event.inputs.app_name }}" www/icon.png || true
+          fi
+
+      - name: Create splash screen
+        run: |
+          # Create a simple splash screen
+          if command -v convert &> /dev/null; then
+            convert -size 1080x1920 xc:#1976d2 -font DejaVu-Sans -pointsize 60 -fill white \
+              -gravity center -annotate 0 "${{ github.event.inputs.app_name }}" www/splash.png || true
+          fi
+
+      - name: Create index.html for webview
+        run: |
+          cat > www/index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <meta name="theme-color" content="#1976d2">
+            <meta name="apple-mobile-web-app-capable" content="yes">
+            <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+            <link rel="manifest" href="manifest.json">
+            <link rel="icon" href="icon.png">
+            <title>${{ github.event.inputs.app_name }}</title>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { 
+                width: 100%; 
+                height: 100vh; 
+                overflow: hidden;
+                background: #ffffff;
+              }
+              iframe {
+                width: 100%;
+                height: 100%;
+                border: none;
+                display: block;
+              }
+              #loading {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                background: #ffffff;
+                z-index: 1000;
+                transition: opacity 0.5s ease;
+              }
+              #loading.hidden {
+                opacity: 0;
+                pointer-events: none;
+              }
+              .spinner {
+                width: 48px;
+                height: 48px;
+                border: 4px solid #e0e0e0;
+                border-top-color: #1976d2;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+              }
+              @keyframes spin {
+                to { transform: rotate(360deg); }
+              }
+              .app-name {
+                margin-top: 20px;
+                font-family: system-ui, -apple-system, sans-serif;
+                font-size: 18px;
+                color: #333;
+              }
+            </style>
+          </head>
+          <body>
+            <div id="loading">
+              <div class="spinner"></div>
+              <div class="app-name">${{ github.event.inputs.app_name }}</div>
+            </div>
+            <iframe 
+              id="webview"
+              src="${{ github.event.inputs.web_url }}"
+              allow="camera; microphone; geolocation; payment; clipboard-read; clipboard-write"
+              allowfullscreen>
+            </iframe>
+            <script>
+              const loading = document.getElementById('loading');
+              const iframe = document.getElementById('webview');
+              
+              // Hide loading when iframe loads
+              iframe.addEventListener('load', () => {
+                setTimeout(() => {
+                  loading.classList.add('hidden');
+                }, 500);
+              });
+              
+              // Timeout fallback
+              setTimeout(() => {
+                loading.classList.add('hidden');
+              }, 10000);
+              
+              // Handle offline status
+              iframe.addEventListener('error', () => {
+                loading.innerHTML = \`
+                  <div style="text-align:center;padding:20px;">
+                    <div style="font-size:48px;margin-bottom:16px;">🌐</div>
+                    <h3 style="color:#333;">Failed to load website</h3>
+                    <p style="color:#666;margin-top:8px;">Please check your internet connection</p>
+                    <button onclick="location.reload()" style="
+                      margin-top:20px;
+                      padding:10px 30px;
+                      background:#1976d2;
+                      color:white;
+                      border:none;
+                      border-radius:8px;
+                      font-size:16px;
+                      cursor:pointer;
+                    ">Retry</button>
+                  </div>
+                \`;
+              });
+            </script>
+          </body>
+          </html>
+          EOF
+
+      - name: Create manifest.json
+        run: |
+          cat > www/manifest.json << EOF
+          {
+            "name": "${{ github.event.inputs.app_name }}",
+            "short_name": "${{ github.event.inputs.app_name }}",
+            "start_url": "${{ github.event.inputs.web_url }}",
+            "display": "${{ github.event.inputs.display_mode }}",
+            "orientation": "${{ github.event.inputs.orientation }}",
+            "background_color": "#ffffff",
+            "theme_color": "#1976d2",
+            "icons": [
+              {
+                "src": "icon.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any maskable"
+              }
+            ],
+            "scope": "/",
+            "description": "${{ github.event.inputs.app_name }} Web App"
+          }
+          EOF
+
+      - name: Initialize Capacitor
+        run: |
+          mkdir -p android
+          npx cap init \
+            "${{ github.event.inputs.app_name }}" \
+            "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}" \
+            --web-dir=www
+          
+          npx cap add android
+          
+          # Update Android config
+          cat > android/app/src/main/AndroidManifest.xml << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="${{ github.event.inputs.package_name || 'com.webapp.myapp' }}">
+            <application
+                android:allowBackup="true"
+                android:icon="@mipmap/ic_launcher"
+                android:label="${{ github.event.inputs.app_name }}"
+                android:roundIcon="@mipmap/ic_launcher_round"
+                android:supportsRtl="true"
+                android:theme="@style/AppTheme"
+                android:usesCleartextTraffic="true"
+                android:networkSecurityConfig="@xml/network_security_config">
+              <activity
+                  android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+                  android:name=".MainActivity"
+                  android:label="${{ github.event.inputs.app_name }}"
+                  android:theme="@style/AppTheme.NoActionBarLaunch"
+                  android:launchMode="singleTask"
+                  android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+              <provider
+                  android:name="androidx.core.content.FileProvider"
+                  android:authorities="\${applicationId}.fileprovider"
+                  android:exported="false"
+                  android:grantUriPermissions="true">
+                <meta-data
+                    android:name="android.support.FILE_PROVIDER_PATHS"
+                    android:resource="@xml/file_paths" />
+              </provider>
+            </application>
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+          </manifest>
+          EOF
+
+      - name: Create network security config
+        run: |
+          mkdir -p android/app/src/main/res/xml
+          cat > android/app/src/main/res/xml/network_security_config.xml << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+            <domain-config cleartextTrafficPermitted="true">
+              <domain includeSubdomains="true">${{ github.event.inputs.web_url | replace('https://', '') | replace('http://', '') | split('/') | first }}</domain>
+            </domain-config>
+            <base-config cleartextTrafficPermitted="true" />
+          </network-security-config>
+          EOF
+
+      - name: Update build.gradle
+        run: |
+          # Update app build.gradle
+          cat > android/app/build.gradle << 'EOF'
+          apply plugin: 'com.android.application'
+          
+          android {
+            namespace "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}"
+            compileSdk 33
+            defaultConfig {
+              applicationId "${{ github.event.inputs.package_name || 'com.webapp.myapp' }}"
+              minSdk 21
+              targetSdk 33
+              versionCode 1
+              versionName "1.0"
+              testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+            }
+            buildTypes {
+              release {
+                minifyEnabled true
+                proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                signingConfig signingConfigs.debug
+              }
+            }
+          }
+          
+          repositories {
+            flatDir {
+              dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+            }
+          }
+          
+          dependencies {
+            implementation fileTree(include: ['*.jar'], dir: 'libs')
+            implementation project(':capacitor-android')
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'androidx.webkit:webkit:1.7.0'
+            implementation 'androidx.core:core-splashscreen:1.0.0'
+          }
+          EOF
+
+      - name: Build APK with Gradle
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
+          cd ..
+
+      - name: Find and rename APK
+        run: |
+          # Find the APK
+          APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -n 1)
+          if [ -n "$APK_PATH" ]; then
+            echo "Found APK at: $APK_PATH"
+            mkdir -p output
+            cp "$APK_PATH" "output/${{ github.event.inputs.app_name }}.apk"
+            echo "APK copied to output/${{ github.event.inputs.app_name }}.apk"
+          else
+            echo "No APK found!"
+            find android/app/build/outputs -type f -name "*.apk" || echo "No APK files found"
+            exit 1
+          fi
+
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-${{ inputs.app_name }}
-          path: ./output/*.apk
-          retention-days: 7
+          name: web2apk-${{ github.event.inputs.app_name }}
+          path: output/*.apk
+          retention-days: 30
+
+      - name: Create release and upload APK
+        if: github.event.inputs.create_release != 'false'
+        run: |
+          TAG="web2apk-$(date +'%Y%m%d-%H%M%S')"
+          
+          # Create release
+          RESPONSE=$(curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d "{
+              \"tag_name\": \"$TAG\",
+              \"name\": \"${{ github.event.inputs.app_name }} - Web2APK $TAG\",
+              \"draft\": false,
+              \"prerelease\": false
+            }")
+          
+          RELEASE_ID=$(echo $RESPONSE | jq -r '.id')
+          UPLOAD_URL=$(echo $RESPONSE | jq -r '.upload_url' | sed 's/{?name,label}//')
+          
+          echo "Release ID: $RELEASE_ID"
+          echo "Upload URL: $UPLOAD_URL"
+          
+          # Upload APK
+          if [ -f "output/${{ github.event.inputs.app_name }}.apk" ]; then
+            curl -L \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              "$UPLOAD_URL?name=${{ github.event.inputs.app_name }}.apk" \
+              --data-binary "@output/${{ github.event.inputs.app_name }}.apk"
+          fi
+
+      - name: Display download info
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📱 Web2APK Build Complete!"
+          echo "📦 APK: ${{ github.event.inputs.app_name }}.apk"
+          echo "=========================================="
+          echo ""
+          echo "📥 Download APK from artifacts or release"
+          echo ""
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
